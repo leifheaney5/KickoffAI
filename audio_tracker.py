@@ -41,9 +41,10 @@ WHISPER_MLX_MODEL = os.environ.get(
 
 # Recognised vocabulary — used to normalise and validate the model's output.
 TEAMS = {"home", "away"}
-ACTIONS = {"pass", "shot", "tackle", "foul", "goal", "save", "cross", "dribble"}
+ACTIONS = {"pass", "shot", "tackle", "foul", "goal", "save", "cross", "dribble",
+           "card", "corner", "offside", "interception", "clearance", "substitution"}
 RESULTS = {"complete", "incomplete", "missed", "blocked", "on target", "scored",
-           "saved", "won", "lost", "successful", "unsuccessful"}
+           "saved", "won", "lost", "successful", "unsuccessful", "yellow", "red"}
 
 
 # --------------------------------------------------------------------------- #
@@ -109,9 +110,10 @@ into a single structured event.
 Return ONLY a JSON object with EXACTLY these keys:
   "team":     "Home" or "Away" (or null if not stated)
   "player":   the player's name or number as spoken, else null
-  "action":   one of: pass, shot, tackle, foul, goal, save, cross, dribble (or null)
+  "action":   one of: pass, shot, tackle, foul, goal, save, cross, dribble, \
+card, corner, offside, interception, clearance, substitution (or null)
   "result":   the outcome, e.g. complete, incomplete, missed, blocked, on target, \
-scored, saved, won, lost (or null)
+scored, saved, won, lost; for a card it MUST be "yellow" or "red" (or null)
   "location": where on the pitch, e.g. "left wing", "midfield", "penalty box" (or null)
 
 Rules:
@@ -121,6 +123,10 @@ name, color, or "us/them/they" to the closest of Home/Away, otherwise null.
 - A "goal" uses action "goal" AND result "scored".
 - A blocked shot uses action "shot", result "blocked".
 - "shot on target" / "on goal" uses action "shot", result "on target".
+- A goalkeeper stop uses action "save" (result "saved").
+- A booking uses action "card" with result "yellow" or "red"; "sent off" / \
+"second yellow" is a "red".
+- "corner kick" uses action "corner"; "offside" uses action "offside".
 - "player" is a name or shirt number only (e.g. "number 10"); a place is a \
 location, never a player.
 - Output JSON only. No prose, no markdown, no code fences.
@@ -130,6 +136,14 @@ phrase: "Home number 10 with a shot on target from the box"
 {"team":"Home","player":"number 10","action":"shot","result":"on target","location":"box"}
 phrase: "Goal for the away team!"
 {"team":"Away","player":null,"action":"goal","result":"scored","location":null}
+phrase: "Great save by the home keeper"
+{"team":"Home","player":null,"action":"save","result":"saved","location":null}
+phrase: "Yellow card for the away number 4"
+{"team":"Away","player":"number 4","action":"card","result":"yellow","location":null}
+phrase: "Home defender sent off, red card"
+{"team":"Home","player":null,"action":"card","result":"red","location":null}
+phrase: "Corner kick for the away side"
+{"team":"Away","player":null,"action":"corner","result":null,"location":null}
 phrase: "Foul by the home defender on the left wing"
 {"team":"Home","player":null,"action":"foul","result":null,"location":"left wing"}
 phrase: "Away completes a pass in midfield"

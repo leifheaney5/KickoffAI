@@ -83,22 +83,44 @@ def team_stats(events: list, team: str) -> dict:
     rows = [e for e in events if e.get("team") == team]
     actions = [e.get("action") for e in rows]
 
+    def res(e):
+        return (e.get("result") or "").lower()
+
     def is_on_target(e):
-        res = (e.get("result") or "").lower()
-        return e.get("action") == "shot" and res in {"on target", "scored", "saved"}
+        return e.get("action") == "shot" and res(e) in {"on target", "scored", "saved"}
+
+    def card(color):
+        # Accept either action "card" + result color, or a "<color>_card" action.
+        return sum(
+            1 for e in rows
+            if (e.get("action") == "card" and color in res(e))
+            or e.get("action") == f"{color}_card"
+        )
+
+    passes = sum(1 for a in actions if a == "pass")
+    passes_complete = sum(
+        1 for e in rows if e.get("action") == "pass" and res(e) == "complete"
+    )
 
     return {
         "Goals": sum(1 for e in rows if e.get("action") == "goal"
-                     or (e.get("result") or "").lower() == "scored"),
+                     or res(e) == "scored"),
         "Shots": sum(1 for a in actions if a == "shot")
                  + sum(1 for e in rows if e.get("action") == "goal"),
         "On Target": sum(1 for e in rows if is_on_target(e))
                      + sum(1 for e in rows if e.get("action") == "goal"),
+        "Saves": sum(1 for a in actions if a == "save"),
         "Tackles": sum(1 for a in actions if a == "tackle"),
         "Fouls": sum(1 for a in actions if a == "foul"),
+        "🟨 Yellow": card("yellow"),
+        "🟥 Red": card("red"),
+        "Corners": sum(1 for a in actions if a == "corner"),
+        "Offsides": sum(1 for a in actions if a == "offside"),
+        "Passes": passes,
+        "Pass %": round(100 * passes_complete / passes, 0) if passes else 0,
         "_successful": sum(
             1 for e in rows
-            if (e.get("result") or "").lower() in POSITIVE_RESULTS
+            if res(e) in POSITIVE_RESULTS
             or e.get("action") in {"pass", "dribble", "cross"}
         ),
     }
@@ -168,7 +190,8 @@ st.caption("Estimated from each team's share of successful actions "
 st.write("")
 
 # Stat cards
-stat_keys = ["Shots", "On Target", "Tackles", "Fouls"]
+stat_keys = ["Shots", "On Target", "Saves", "Tackles", "Fouls",
+             "🟨 Yellow", "🟥 Red", "Corners", "Offsides", "Passes"]
 col_home, col_away = st.columns(2)
 
 
@@ -177,6 +200,10 @@ def render_card(col, name, css, stats):
         f"<div class='stat-row'><span>{k}</span>"
         f"<span class='stat-val'>{stats[k]}</span></div>"
         for k in stat_keys
+    )
+    rows += (
+        f"<div class='stat-row'><span>Pass accuracy</span>"
+        f"<span class='stat-val'>{stats['Pass %']:.0f}%</span></div>"
     )
     col.markdown(
         f"<div class='team-card {css}'>"

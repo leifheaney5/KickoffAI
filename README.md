@@ -37,9 +37,14 @@ Speak natural play-by-play, one event per breath, e.g.:
 - "Home number 10 with a shot on target from the box"
 - "Away tackle in midfield, won the ball"
 - "Goal for the home team!"
+- "Great save by the away keeper"
+- "Yellow card for the home number 4" · "Away defender sent off, red card"
+- "Corner kick for the home side" · "Offside against the away striker"
 - "Foul by the away defender on the left wing"
 
-The brain maps everything to two teams: **Home** and **Away**.
+The brain maps everything to two teams: **Home** and **Away**. Tracked stats:
+goals, shots, shots on target, saves, tackles, fouls, yellow/red cards,
+corners, offsides, passes & pass accuracy, and an estimated possession share.
 
 ## Requirements
 
