@@ -1,0 +1,21 @@
+# ---- KickoffAI Python dependencies ----
+# Install into a virtualenv (kickoff.sh does this for you):
+#   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+
+# Microphone capture + silence-based chunking
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.13
+
+# Local transcription.
+# mlx-whisper is the Apple-Silicon-optimized path (uses the GPU / Neural Engine).
+# openai-whisper is the cross-platform fallback used automatically if mlx is unavailable.
+mlx-whisper>=0.4.0 ; sys_platform == "darwin" and platform_machine == "arm64"
+openai-whisper>=20231117
+
+# Talking to the local Ollama HTTP API
+requests>=2.31.0
+
+# Real-time dashboard
+streamlit>=1.33.0
+streamlit-autorefresh>=1.0.1
+pandas>=2.0.0

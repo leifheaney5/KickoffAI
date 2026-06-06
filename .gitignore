@@ -1,0 +1,12 @@
+# Python virtualenv
+.venv/
+__pycache__/
+*.pyc
+
+# Match data (regenerated each session)
+match_data.json
+match_data.csv
+*.tmp
+
+# macOS
+.DS_Store
