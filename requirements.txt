@@ -19,6 +19,7 @@ requests>=2.31.0
 streamlit>=1.37.0
 streamlit-autorefresh>=1.0.1  # fallback live-refresh for Streamlit < 1.37
 pandas>=2.0.0
+watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 
 # Report export (email-friendly PDF) + timeline image rendering
 fpdf2>=2.7.0
