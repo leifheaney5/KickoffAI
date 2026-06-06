@@ -15,6 +15,7 @@ Or let kickoff.sh manage it as a background process.
 
 import json
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -23,6 +24,8 @@ import wave
 from datetime import datetime, timezone
 
 import requests
+
+import control
 
 # --------------------------------------------------------------------------- #
 # Configuration (override via environment variables)
@@ -127,6 +130,8 @@ name, color, or "us/them/they" to the closest of Home/Away, otherwise null.
 - A booking uses action "card" with result "yellow" or "red"; "sent off" / \
 "second yellow" is a "red".
 - "corner kick" uses action "corner"; "offside" uses action "offside".
+- A substitution ("X comes on", "Y is subbed off") uses action "substitution"; \
+put the player coming ON in "player" when stated.
 - "player" is a name or shirt number only (e.g. "number 10"); a place is a \
 location, never a player.
 - Output JSON only. No prose, no markdown, no code fences.
@@ -144,6 +149,8 @@ phrase: "Home defender sent off, red card"
 {"team":"Home","player":null,"action":"card","result":"red","location":null}
 phrase: "Corner kick for the away side"
 {"team":"Away","player":null,"action":"corner","result":null,"location":null}
+phrase: "Substitution for home, number 9 comes on"
+{"team":"Home","player":"number 9","action":"substitution","result":null,"location":null}
 phrase: "Foul by the home defender on the left wing"
 {"team":"Home","player":null,"action":"foul","result":null,"location":"left wing"}
 phrase: "Away completes a pass in midfield"
@@ -207,11 +214,27 @@ def normalise(event: dict) -> dict:
 
     return {
         "team": team,
-        "player": clean(event.get("player")),
+        "player": normalise_player(clean(event.get("player"))),
         "action": action,
         "result": result,
         "location": clean(event.get("location")),
     }
+
+
+def normalise_player(player):
+    """Canonicalise player references so '#6', 'number 6', 'no 6' all merge.
+
+    Shirt numbers become '#N'; named players are title-cased.
+    """
+    if not player:
+        return None
+    s = player.strip()
+    m = re.search(r"(?:number|num|no\.?|#|player)\s*#?\s*(\d{1,3})", s, re.I)
+    if m:
+        return f"#{int(m.group(1))}"
+    if s.isdigit():
+        return f"#{int(s)}"
+    return s.title()
 
 
 # --------------------------------------------------------------------------- #
@@ -311,7 +334,20 @@ def main():
     print("  Speak your play-by-play. Press Ctrl+C to stop.", flush=True)
     print("=" * 60, flush=True)
 
+    paused_notice = False
     while running["flag"]:
+        # Honour a pause requested from the dashboard: stop logging events.
+        if control.load_control().get("paused"):
+            if not paused_notice:
+                print("[ear] recording paused (resume from the dashboard)",
+                      flush=True)
+                paused_notice = True
+            time.sleep(0.4)
+            continue
+        if paused_notice:
+            print("[ear] recording resumed", flush=True)
+            paused_notice = False
+
         # Capture one phrase.
         try:
             with mic as source:
@@ -342,8 +378,13 @@ def main():
         print(f"[ear] heard: {text!r}", flush=True)
 
         event = parse_event(text)
+        # Stamp the current match-clock reading so the feed/report can show it.
+        ctrl = control.load_control()
+        main_clk, added, _half = control.clock_label(ctrl["timer"])
+        match_time = f"{main_clk}{(' ' + added) if added else ''}"
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "match_time": match_time,
             "raw_text": text,
             **(event or {
                 "team": None, "player": None, "action": None,

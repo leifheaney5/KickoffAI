@@ -16,6 +16,9 @@ openai-whisper>=20231117
 requests>=2.31.0
 
 # Real-time dashboard
-streamlit>=1.33.0
-streamlit-autorefresh>=1.0.1
+streamlit>=1.37.0
+streamlit-autorefresh>=1.0.1  # fallback live-refresh for Streamlit < 1.37
 pandas>=2.0.0
+
+# Report export (email-friendly PDF)
+fpdf2>=2.7.0

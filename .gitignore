@@ -3,9 +3,11 @@
 __pycache__/
 *.pyc
 
-# Match data (regenerated each session)
+# Match data + runtime state (regenerated each session)
 match_data.json
 match_data.csv
+control.json
+reports/
 *.tmp
 
 # macOS
