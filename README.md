@@ -65,6 +65,14 @@ share — aggregated per team **and** per player.
 - **Save & export report** — writes an email-friendly `.txt` and a clean `.pdf`
   into `reports/`, archives the raw data, and offers both as downloads.
 
+### Timeline page
+
+A second page (in the sidebar) shows a **visual vertical timeline**: a coloured
+icon badge for every event (goal, card, sub, save, shot, ...) with a
+team-coloured ring. Click any event to expand its full details, filter by event
+type, flip the order, and **export the timeline as a PNG**. The same image is
+embedded into the exported PDF report.
+
 ## Requirements
 
 - macOS on Apple Silicon (Intel works too via the openai-whisper fallback)
@@ -82,8 +90,11 @@ share — aggregated per team **and** per player.
 |------|------|
 | `audio_tracker.py` | Listens, transcribes, parses via Ollama, writes events |
 | `dashboard.py`     | Streamlit real-time dashboard (clock, stats, controls) |
+| `pages/1_Match_Timeline.py` | Visual, clickable timeline page + image export |
 | `stats.py`         | Shared stat engine (team + player aggregation) |
 | `control.py`       | Shared state: pause flag, match timer, summary notes |
+| `icons.py`         | Shared event categories, colours, and SVG icon badges |
+| `timeline_image.py`| Renders the timeline PNG (for export + PDF embed) |
 | `report.py`        | Compiles the data into `.txt` + `.pdf` reports |
 | `kickoff.sh`       | One-button launcher with clean shutdown |
 | `requirements.txt` | Python dependencies |

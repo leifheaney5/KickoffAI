@@ -19,6 +19,7 @@ import shutil
 from datetime import datetime
 
 import stats as S
+import timeline_image as TL
 
 REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "reports")
 
@@ -149,7 +150,7 @@ def build_text(events, data, summary, clock) -> str:
 # --------------------------------------------------------------------------- #
 # PDF report
 # --------------------------------------------------------------------------- #
-def build_pdf(events, data, summary, clock, path):
+def build_pdf(events, data, summary, clock, path, timeline_png=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
@@ -291,6 +292,23 @@ def build_pdf(events, data, summary, clock, path):
         pdf.multi_cell(epw * 0.74, 5, _event_summary(e),
                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
+    # Visual timeline image on its own page, scaled to fit.
+    if timeline_png and os.path.exists(timeline_png):
+        from PIL import Image
+        pdf.add_page()
+        text("Visual Timeline", 13, "B", INK, h=8)
+        with Image.open(timeline_png) as im:
+            iw, ih = im.size
+        aspect = iw / ih
+        max_w, max_h = epw, pdf.h - pdf.get_y() - pdf.b_margin
+        w = max_w
+        h = w / aspect
+        if h > max_h:
+            h = max_h
+            w = h * aspect
+        pdf.image(timeline_png, x=pdf.l_margin + (epw - w) / 2,
+                  y=pdf.get_y(), w=w, h=h)
+
     pdf.output(path)
 
 
@@ -311,12 +329,22 @@ def generate(events=None, summary="", clock="", out_dir=None,
 
     txt_path = os.path.join(out_dir, f"match_report_{ts}.txt")
     pdf_path = os.path.join(out_dir, f"match_report_{ts}.pdf")
+    png_path = os.path.join(out_dir, f"match_timeline_{ts}.png")
+
+    # Render the visual timeline image (embedded in the PDF + saved alongside).
+    score = (data["home"]["Goals"], data["away"]["Goals"])
+    try:
+        TL.render(events, score=score, clock=clock, path=png_path)
+    except Exception:
+        png_path = None
 
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock))
-    build_pdf(events, data, summary, clock, pdf_path)
+    build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path)
 
     result = {"txt": txt_path, "pdf": pdf_path, "events": len(events)}
+    if png_path:
+        result["image"] = png_path
     if archive and os.path.exists(data_file):
         archive_path = os.path.join(out_dir, f"match_data_{ts}.json")
         shutil.copyfile(data_file, archive_path)
