@@ -96,12 +96,17 @@ st.markdown(f"<div class='legend'>{legend}</div>", unsafe_allow_html=True)
 # --------------------------------------------------------------------------- #
 # Controls: filter, order, export
 # --------------------------------------------------------------------------- #
+# Default to meaningful events; background chatter ("other", null actions) is
+# hidden unless the user opts in via the filter.
+meaningful = [k for k in present if k != "other"]
+default_kinds = meaningful if meaningful else present
+
 c1, c2, c3 = st.columns([3, 1.3, 1.6])
 with c1:
     kinds = st.multiselect(
         "Show event types",
         options=present,
-        default=present,
+        default=default_kinds,
         format_func=lambda k: IC.KIND_LABEL.get(k, k),
         label_visibility="collapsed",
         placeholder="Filter event types…",
@@ -110,7 +115,7 @@ with c2:
     newest_first = st.toggle("Newest first", value=False)
 with c3:
     if st.button("Export timeline image", type="primary",
-                 use_container_width=True):
+                 width='stretch'):
         st.session_state["tl_png"] = TL.render_to_bytes(
             events, score=score, clock=clock)
 
@@ -118,11 +123,19 @@ shown = [e for e in events if IC.event_kind(e) in set(kinds)]
 if newest_first:
     shown = list(reversed(shown))
 
+if not shown:
+    chatter = sum(1 for e in events if IC.event_kind(e) == "other")
+    st.info(
+        f"No matching events for the current filter. "
+        f"{chatter} background/unclassified event(s) are hidden by default — "
+        f"add **Event** in the filter above to show them."
+    )
+
 # Exported image preview + download
 png = st.session_state.get("tl_png")
 if png:
     with st.expander("Timeline image (PNG)", expanded=True):
-        st.image(png, use_container_width=True)
+        st.image(png, width='stretch')
         st.download_button(
             "Download timeline.png", png,
             file_name=f"match_timeline_{datetime.now():%Y%m%d_%H%M%S}.png",

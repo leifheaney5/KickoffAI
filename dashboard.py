@@ -12,6 +12,7 @@ Run via:  streamlit run dashboard.py   (or use ./kickoff.sh)
 """
 
 import os
+import time
 
 import pandas as pd
 import requests
@@ -61,10 +62,81 @@ st.markdown(
               padding: 1px 8px; border-radius: 6px; font-size: .76rem;
               font-weight: 700; color: white; }}
       .t {{ color:#9ca3af; font-variant-numeric: tabular-nums; margin: 0 8px; }}
+
+      /* Recording status bar */
+      .statusbar {{ display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+                    border:1px solid #e5e7eb; border-radius:12px;
+                    padding:10px 16px; background:#fff; }}
+      .sb-item {{ display:flex; align-items:center; gap:8px; }}
+      .sb-label {{ font-size:.72rem; letter-spacing:.1em; text-transform:uppercase;
+                   color:#9ca3af; font-weight:700; }}
+      .sb-val {{ font-weight:700; font-size:1.05rem;
+                 font-variant-numeric: tabular-nums; }}
+      .sb-mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+      .dot {{ width:13px; height:13px; border-radius:50%; display:inline-block; }}
+      .dot.rec {{ background:{AWAY}; animation: recpulse 1.4s infinite; }}
+      .dot.paused {{ background:#f59e0b; }}
+      .dot.off {{ background:transparent; border:2px solid #d1d5db; }}
+      @keyframes recpulse {{
+        0%   {{ box-shadow:0 0 0 0 rgba(220,38,38,.55); }}
+        70%  {{ box-shadow:0 0 0 11px rgba(220,38,38,0); }}
+        100% {{ box-shadow:0 0 0 0 rgba(220,38,38,0); }}
+      }}
+      .mic {{ transition: filter .3s; }}
+      .mic.on {{ filter: drop-shadow(0 0 6px rgba(22,163,74,.9)); }}
+      .heard {{ color:#6b7280; font-style:italic; font-size:.9rem;
+                max-width:430px; overflow:hidden; text-overflow:ellipsis;
+                white-space:nowrap; }}
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+def mic_svg(active: bool) -> str:
+    color = "#16a34a" if active else "#9ca3af"
+    cls = "mic on" if active else "mic"
+    return (
+        f"<svg class='{cls}' width='22' height='22' viewBox='0 0 24 24' "
+        f"fill='none' stroke='{color}' stroke-width='2' stroke-linecap='round' "
+        f"stroke-linejoin='round'><rect x='9' y='3' width='6' height='11' rx='3'/>"
+        f"<path d='M5 11a7 7 0 0 0 14 0'/><path d='M12 18v3'/></svg>"
+    )
+
+
+def render_record_status():
+    """Top-of-dashboard live indicator: recording glow, durations, last heard."""
+    status = control.load_status()
+    paused = control.load_control().get("paused", False)
+    online = control.tracker_online(status)
+
+    if not online:
+        dot, label, active = "off", "Tracker offline", False
+    elif paused:
+        dot, label, active = "paused", "Paused", False
+    else:
+        dot, label, active = "rec", "Recording", True
+
+    rec = control.fmt_clock(control.record_seconds(status))
+    session = (control.fmt_clock(time.time() - status["session_start"])
+               if status.get("session_start") else "00:00")
+    events_n = status.get("events", len(S.load_events()))
+    heard = status.get("last_heard") or "—"
+
+    st.markdown(
+        f"<div class='statusbar'>"
+        f"<div class='sb-item'>{mic_svg(active)}<span class='dot {dot}'></span>"
+        f"<span class='sb-val'>{label}</span></div>"
+        f"<div class='sb-item'><span class='sb-label'>Recording</span>"
+        f"<span class='sb-val sb-mono'>{rec}</span></div>"
+        f"<div class='sb-item'><span class='sb-label'>Session</span>"
+        f"<span class='sb-val sb-mono'>{session}</span></div>"
+        f"<div class='sb-item'><span class='sb-label'>Events</span>"
+        f"<span class='sb-val'>{events_n}</span></div>"
+        f"<div class='sb-item'><span class='sb-label'>Last heard</span>"
+        f"<span class='heard'>{heard}</span></div>"
+        f"</div>",
+        unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +196,13 @@ players = S.player_stats(events)
 st.markdown("# KickoffAI")
 st.caption(f"Live match tracker · {len(events)} events logged")
 
+# Recording indicator bar — its own lightweight 1s fragment so the glow/timer
+# tick smoothly without rerunning the controls below.
+if hasattr(st, "fragment"):
+    st.fragment(run_every=1.0)(render_record_status)()
+else:
+    render_record_status()
+
 # --------------------------------------------------------------------------- #
 # CONTROLS  (outside the auto-refresh fragment so they never reset)
 # --------------------------------------------------------------------------- #
@@ -133,16 +212,16 @@ with st.container():
     with c1:
         st.markdown("##### Match clock")
         b1, b2, b3, b4 = st.columns(4)
-        if b1.button("Start", use_container_width=True):
+        if b1.button("Start", width='stretch'):
             control.save_control(control.timer_start(state))
             st.rerun()
-        if b2.button("Pause", use_container_width=True):
+        if b2.button("Pause", width='stretch'):
             control.save_control(control.timer_pause(state))
             st.rerun()
-        if b3.button("Halftime", use_container_width=True):
+        if b3.button("Halftime", width='stretch'):
             control.save_control(control.timer_halftime(state))
             st.rerun()
-        if b4.button("Reset", use_container_width=True):
+        if b4.button("Reset", width='stretch'):
             control.save_control(control.timer_reset(state))
             st.rerun()
 
@@ -150,7 +229,7 @@ with st.container():
         st.markdown("##### Recording")
         paused = state.get("paused", False)
         label = "Resume recording" if paused else "Pause recording"
-        if st.button(label, use_container_width=True, type="secondary"):
+        if st.button(label, width='stretch', type="secondary"):
             state["paused"] = not paused
             control.save_control(state)
             st.rerun()
@@ -232,7 +311,7 @@ def render_live():
         df = df.reindex(columns=cols)
         df.index.name = "Player"
         df = df.sort_values(["Goals", "Shots"], ascending=False)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width='stretch')
 
         # Spotlight card for the player picked in the controls
         pick = st.session_state.get("spotlight")
@@ -282,7 +361,7 @@ def render_live():
 
     with st.expander("Raw event log"):
         if events:
-            st.dataframe(pd.DataFrame(events), use_container_width=True, height=280)
+            st.dataframe(pd.DataFrame(events), width='stretch', height=280)
         else:
             st.write("Empty.")
 
@@ -313,11 +392,11 @@ with left:
         height=140, label_visibility="collapsed",
         placeholder="Type a summary, or generate one from the stats…")
     a, b = st.columns(2)
-    if a.button("Save summary", use_container_width=True):
+    if a.button("Save summary", width='stretch'):
         state["summary"] = notes
         control.save_control(state)
         st.success("Saved.")
-    if b.button("Draft with AI", use_container_width=True):
+    if b.button("Draft with AI", width='stretch'):
         try:
             with st.spinner("Writing summary…"):
                 drafted = ai_summary(events)
@@ -335,7 +414,7 @@ with right:
 
     st.markdown("#### Export report")
     if st.button("Save & export report", type="primary",
-                 use_container_width=True):
+                 width='stretch'):
         try:
             main_clk, added, half = control.clock_label(state["timer"])
             clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
@@ -351,9 +430,9 @@ with right:
         with open(paths["txt"], "rb") as fh:
             st.download_button("Download .txt", fh.read(),
                                file_name=os.path.basename(paths["txt"]),
-                               mime="text/plain", use_container_width=True)
+                               mime="text/plain", width='stretch')
         with open(paths["pdf"], "rb") as fh:
             st.download_button("Download .pdf", fh.read(),
                                file_name=os.path.basename(paths["pdf"]),
-                               mime="application/pdf", use_container_width=True)
+                               mime="application/pdf", width='stretch')
         st.caption(f"Saved to {os.path.dirname(paths['pdf'])}/")

@@ -54,6 +54,10 @@ share — aggregated per team **and** per player.
 
 ## Dashboard features
 
+- **Recording indicator** at the top: a glowing mic + pulsing red dot when the
+  tracker is actively listening (amber when paused, hollow when the tracker is
+  offline), plus live **recording time**, **session time**, event count, and the
+  last phrase heard.
 - **90-minute match clock** with Start / Pause / Halftime / Reset. After 45:00
   (or 90:00 in the second half) it shows **added time** as `+M:SS`. Every logged
   event is stamped with the match-clock reading.

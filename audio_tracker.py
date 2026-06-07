@@ -334,6 +334,20 @@ def main():
     print("  Speak your play-by-play. Press Ctrl+C to stop.", flush=True)
     print("=" * 60, flush=True)
 
+    # Live status shared with the dashboard's recording indicator.
+    now = time.time()
+    status = {
+        "session_start": now,
+        "recording": True,
+        "rec_since": now,
+        "rec_accum": 0.0,
+        "last_event": None,
+        "last_heard": None,
+        "events": len(load_events()),
+        "backend": transcriber.backend,
+    }
+    control.save_status(status)
+
     paused_notice = False
     while running["flag"]:
         # Honour a pause requested from the dashboard: stop logging events.
@@ -342,11 +356,21 @@ def main():
                 print("[ear] recording paused (resume from the dashboard)",
                       flush=True)
                 paused_notice = True
+                # Bank the active recording time once, on the pause transition.
+                if status["recording"] and status["rec_since"]:
+                    status["rec_accum"] += time.time() - status["rec_since"]
+                status["recording"] = False
+                status["rec_since"] = None
+            control.save_status(status)  # keep "updated" fresh while paused
             time.sleep(0.4)
             continue
         if paused_notice:
             print("[ear] recording resumed", flush=True)
             paused_notice = False
+            status["recording"] = True
+            status["rec_since"] = time.time()
+
+        control.save_status(status)  # heartbeat each active cycle
 
         # Capture one phrase.
         try:
@@ -376,6 +400,8 @@ def main():
             continue  # empty transcription — skip without crashing
 
         print(f"[ear] heard: {text!r}", flush=True)
+        status["last_heard"] = text[:140]
+        control.save_status(status)
 
         event = parse_event(text)
         # Stamp the current match-clock reading so the feed/report can show it.
@@ -392,9 +418,18 @@ def main():
             }),
         }
         append_event(record)
+        status["last_event"] = record["timestamp"]
+        status["events"] = status.get("events", 0) + 1
+        control.save_status(status)
         print(f"[brain] logged: {json.dumps({k: record[k] for k in ('team','action','result')})}",
               flush=True)
 
+    # Mark the recording stopped on a clean shutdown.
+    if status["recording"] and status["rec_since"]:
+        status["rec_accum"] += time.time() - status["rec_since"]
+    status["recording"] = False
+    status["rec_since"] = None
+    control.save_status(status)
     print("[ear] stopped cleanly.", flush=True)
 
 

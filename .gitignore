@@ -7,6 +7,7 @@ __pycache__/
 match_data.json
 match_data.csv
 control.json
+status.json
 reports/
 *.tmp
 

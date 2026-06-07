@@ -16,6 +16,11 @@ import time
 
 CONTROL_FILE = os.environ.get("KICKOFF_CONTROL_FILE", "control.json")
 
+# Live tracker status — written ONLY by audio_tracker, read by the dashboard.
+# Kept in a separate file from control.json so the two processes never race on
+# the same writer.
+STATUS_FILE = os.environ.get("KICKOFF_STATUS_FILE", "status.json")
+
 FIRST_HALF_SECONDS = 45 * 60
 FULL_TIME_SECONDS = 90 * 60
 
@@ -129,3 +134,50 @@ def timer_halftime(state: dict) -> dict:
         "second_half": True,
     }
     return state
+
+
+# --------------------------------------------------------------------------- #
+# Live tracker status (audio_tracker writes, dashboard reads)
+# --------------------------------------------------------------------------- #
+def load_status() -> dict:
+    if not os.path.exists(STATUS_FILE):
+        return {}
+    try:
+        with open(STATUS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def save_status(status: dict) -> None:
+    status = {**status, "updated": time.time()}
+    directory = os.path.dirname(os.path.abspath(STATUS_FILE)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(status, fh)
+        os.replace(tmp, STATUS_FILE)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def record_seconds(status: dict) -> float:
+    """Active recording time (banked + the current running stretch)."""
+    secs = float(status.get("rec_accum", 0.0))
+    if status.get("recording") and status.get("rec_since"):
+        secs += time.time() - status["rec_since"]
+    return secs
+
+
+def tracker_online(status: dict, max_age: float = 8.0) -> bool:
+    """True if the tracker wrote its status recently enough to be considered live."""
+    updated = status.get("updated")
+    return bool(updated) and (time.time() - updated) < max_age
+
+
+def fmt_clock(seconds: float) -> str:
+    s = int(max(seconds, 0))
+    return f"{s // 60:02d}:{s % 60:02d}"
