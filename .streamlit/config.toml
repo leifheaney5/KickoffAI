@@ -1,8 +1,13 @@
 [theme]
-# The dashboard/timeline CSS is built for light surfaces (#fff cards & feed).
-# Pin the light theme so it doesn't follow the OS into dark mode, which made
-# the default text white and invisible on those light backgrounds.
+# Kickoff Pulse brand theme (see branding/kickoff-pulse-branding-guide.md).
+# Pinned light so it never follows the OS into dark mode (which made the
+# light-surface CSS render white-on-white).
 base = "light"
+primaryColor = "#1E7BFF"            # Pulse Blue
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#111827"
+font = "sans serif"
 
 [browser]
 gatherUsageStats = false

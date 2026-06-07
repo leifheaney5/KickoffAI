@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — The Ear + The Brain.
+Kickoff Pulse — The Ear + The Brain.
 
 Continuously listens to the default microphone, transcribes short bursts of
 speech locally (mlx-whisper on Apple Silicon, falling back to openai-whisper),
@@ -329,7 +329,7 @@ def main():
         sys.exit(1)
 
     print("=" * 60, flush=True)
-    print(f"  KickoffAI listening  |  transcribe: {transcriber.backend}", flush=True)
+    print(f"  Kickoff Pulse listening  |  transcribe: {transcriber.backend}", flush=True)
     print(f"  model: {OLLAMA_MODEL}  |  data file: {DATA_FILE}", flush=True)
     print("  Speak your play-by-play. Press Ctrl+C to stop.", flush=True)
     print("=" * 60, flush=True)

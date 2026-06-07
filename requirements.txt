@@ -1,4 +1,4 @@
-# ---- KickoffAI Python dependencies ----
+# ---- Kickoff Pulse Python dependencies ----
 # Install into a virtualenv (kickoff.sh does this for you):
 #   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 

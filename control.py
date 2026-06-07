@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — shared control state.
+Kickoff Pulse — shared control state.
 
 A tiny JSON file (control.json) that the dashboard writes and the audio tracker
 reads. It holds:

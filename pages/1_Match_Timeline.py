@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — Timeline page.
+Kickoff Pulse — Timeline page.
 
 A visually-friendly vertical timeline of the match: a coloured icon badge for
 every event (goals, cards, subs, ...), click any event to expand its full
@@ -17,12 +17,15 @@ import streamlit as st
 # Make the project root importable when run as a Streamlit page.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import brand           # noqa: E402
 import control          # noqa: E402
 import icons as IC      # noqa: E402
 import stats as S       # noqa: E402
 import timeline_image as TL  # noqa: E402
 
-st.set_page_config(page_title="KickoffAI — Timeline", layout="wide")
+st.set_page_config(page_title=f"{brand.NAME} — Timeline",
+                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
+st.markdown(brand.global_css(), unsafe_allow_html=True)
 
 HOME, AWAY = IC.HOME_COLOR, IC.AWAY_COLOR
 
@@ -65,6 +68,8 @@ away = S.team_stats(events, "Away")
 main_clk, added, half = control.clock_label(state["timer"])
 clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
 score = (home["Goals"], away["Goals"])
+
+st.markdown(brand.header_html(), unsafe_allow_html=True)
 
 match_name = (state.get("match_name") or "").strip()
 st.markdown(f"# {match_name}" if match_name else "# Match Timeline")

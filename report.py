@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — report generator.
+Kickoff Pulse — report generator.
 
 Compiles the logged match data into:
   - an email-friendly plain-text report (reports/match_report_<ts>.txt)
@@ -23,10 +23,11 @@ import timeline_image as TL
 
 REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "reports")
 
-HOME_RGB = (37, 99, 235)    # blue
+HOME_RGB = (30, 123, 255)   # Pulse Blue (brand)
 AWAY_RGB = (220, 38, 38)    # red
-INK = (33, 37, 41)
-MUTED = (110, 116, 122)
+NAVY_RGB = (7, 26, 61)      # Primary Navy (brand)
+INK = (17, 24, 39)          # Dark Text (brand)
+MUTED = (107, 114, 128)
 LINE = (222, 226, 230)
 
 
@@ -79,7 +80,7 @@ def build_text(events, data, summary, clock, match_name="") -> str:
         L.append(ch * w)
 
     rule()
-    L.append("KICKOFF AI  -  MATCH REPORT".center(w))
+    L.append("KICKOFF PULSE  -  MATCH REPORT".center(w))
     rule()
     if match_name:
         L.append(match_name.center(w))
@@ -171,8 +172,19 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         pdf.set_text_color(*color)
         pdf.cell(0, h, txt, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align=align)
 
-    # Header
-    text("KICKOFF AI", 22, "B", HOME_RGB, h=10)
+    # Header — brand logo (falls back to a wordmark if the asset is missing)
+    import brand
+    logo = brand.logo_pil_white()
+    if logo is not None:
+        try:
+            y0 = pdf.get_y()
+            lw = 58
+            pdf.image(logo, x=pdf.l_margin, y=y0, w=lw)
+            pdf.set_y(y0 + lw * logo.height / logo.width + 3)
+        except Exception:
+            text("KICKOFF PULSE", 22, "B", NAVY_RGB, h=10)
+    else:
+        text("KICKOFF PULSE", 22, "B", NAVY_RGB, h=10)
     text(match_name or "Match Report", 13, "", MUTED, h=7)
     meta = f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     if clock:

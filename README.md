@@ -1,8 +1,13 @@
-# KickoffAI
+# Kickoff Pulse
 
-A fully-local, real-time soccer stats tracker for Apple Silicon Macs. Narrate a
-match into your mic and watch a live dashboard fill up with stats — no cloud, no
-API keys.
+<p align="center">
+  <img src="branding/kickoff-pulse-logo-white-bg.png" alt="Kickoff Pulse" width="360">
+</p>
+
+**Kickoff Pulse** is an AI-powered soccer intelligence platform — the pulse of
+the match. A fully-local, real-time soccer stats tracker (Apple Silicon Macs and
+Windows). Narrate a match into your mic and watch a live dashboard fill up with
+stats — no cloud, no API keys.
 
 ```
   Your voice
@@ -25,8 +30,16 @@ API keys.
 
 ## Quick start
 
+macOS / Linux:
+
 ```bash
 ./kickoff.sh
+```
+
+Windows (PowerShell 7+):
+
+```powershell
+.\kickoff.ps1
 ```
 
 On first run this creates a `.venv`, installs dependencies, verifies Ollama and

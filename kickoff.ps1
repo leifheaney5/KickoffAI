@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #
-# kickoff.ps1 — KickoffAI's one-button launcher for Windows (PowerShell 7+).
+# kickoff.ps1 — Kickoff Pulse's one-button launcher for Windows (PowerShell 7+).
 #
 #   .\kickoff.ps1
 #
@@ -36,7 +36,7 @@ function Test-OllamaUp {
 }
 
 Write-Host '================================================================'
-Write-Green '  KickoffAI - starting up'
+Write-Green '  Kickoff Pulse - starting up'
 Write-Host '================================================================'
 
 # --------------------------------------------------------------------------- #
@@ -95,7 +95,7 @@ $streamlitProc = $null
 
 function Stop-Kickoff {
     Write-Host ''
-    Write-Yellow 'Shutting down KickoffAI...'
+    Write-Yellow 'Shutting down Kickoff Pulse...'
     foreach ($p in @($streamlitProc, $audioProc)) {
         if ($p -and -not $p.HasExited) {
             try { $p.Kill($true) } catch {}

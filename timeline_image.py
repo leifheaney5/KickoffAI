@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — timeline image renderer.
+Kickoff Pulse — timeline image renderer.
 
 Draws the match event log as a clean vertical timeline PNG using Pillow:
 a vertical rail with a coloured icon badge per event (team-coloured ring),
@@ -22,8 +22,8 @@ BADGE_R = 19
 ROW_H = 74
 HEADER_H = 132
 
-INK = (33, 37, 41)
-MUTED = (120, 126, 132)
+INK = (17, 24, 39)        # brand Dark Text
+MUTED = (107, 114, 128)
 RAIL = (224, 228, 232)
 BG = (255, 255, 255)
 
@@ -34,11 +34,18 @@ def _rgb(hexv: str):
 
 
 def _font(size, bold=False):
+    win = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
     candidates = (
-        ["/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        # Windows (Inter if installed, then Segoe UI / Arial bold)
+        [os.path.join(win, "Inter-Bold.ttf"), os.path.join(win, "seguisb.ttf"),
+         os.path.join(win, "segoeuib.ttf"), os.path.join(win, "arialbd.ttf"),
+         # macOS
+         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
          "/System/Library/Fonts/HelveticaNeue.ttc"]
         if bold else
-        ["/System/Library/Fonts/Supplemental/Arial.ttf",
+        [os.path.join(win, "Inter-Regular.ttf"), os.path.join(win, "segoeui.ttf"),
+         os.path.join(win, "arial.ttf"),
+         "/System/Library/Fonts/Supplemental/Arial.ttf",
          "/System/Library/Fonts/HelveticaNeue.ttc"]
     ) + ["/Library/Fonts/Arial.ttf"]
     for path in candidates:
@@ -132,7 +139,7 @@ def render(events, score=(0, 0), clock="", title="Match Timeline", path=None):
     f_detail = _font(14)
 
     # Header
-    draw.text((PAD, PAD - 6), "KICKOFF AI", font=f_title, fill=_rgb(IC.HOME_COLOR))
+    draw.text((PAD, PAD - 6), "KICKOFF PULSE", font=f_title, fill=_rgb(IC.HOME_COLOR))
     draw.text((PAD, PAD + 32), title, font=f_sub, fill=MUTED)
     score_txt = f"HOME {score[0]} - {score[1]} AWAY"
     if clock:

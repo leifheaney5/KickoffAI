@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — The Display.
+Kickoff Pulse — The Display.
 
 A clean, real-time Streamlit dashboard that reads match_data.json (written by
 audio_tracker.py) and shows: a 90-minute match clock with halftime / added-time,
@@ -18,6 +18,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import brand
 import control
 import report
 import stats as S
@@ -25,10 +26,13 @@ import stats as S
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
-HOME = "#2563eb"   # blue
-AWAY = "#dc2626"   # red
+HOME = brand.HOME       # Pulse Blue
+AWAY = brand.AWAY       # red
+NAVY, PULSE, SIGNAL = brand.NAVY, brand.PULSE, brand.SIGNAL
 
-st.set_page_config(page_title="KickoffAI", page_icon=None, layout="wide")
+st.set_page_config(page_title=brand.NAME, page_icon=brand.LOGO_TRANSPARENT,
+                   layout="wide")
+st.markdown(brand.global_css(), unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
 # Styling — minimal, neutral, sleek
@@ -47,8 +51,8 @@ st.markdown(
                      letter-spacing:.12em; text-transform:uppercase;
                      font-size:.8rem; }}
       .score {{ font-size: 3rem; font-weight: 800; line-height: 1; }}
-      .card {{ border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px 18px;
-               background: #ffffff; }}
+      .card {{ border: 1px solid #eef2f7; border-radius: 16px; padding: 16px 18px;
+               background: #ffffff; box-shadow: 0 4px 12px rgba(7,26,61,.08); }}
       .card.home {{ border-top: 4px solid {HOME}; }}
       .card.away {{ border-top: 4px solid {AWAY}; }}
       .card-title {{ font-weight: 700; font-size: 1.05rem; margin-bottom: 8px; }}
@@ -74,8 +78,9 @@ st.markdown(
 
       /* Recording status bar */
       .statusbar {{ display:flex; align-items:center; gap:18px; flex-wrap:wrap;
-                    border:1px solid #e5e7eb; border-radius:12px;
-                    padding:10px 16px; background:#fff; }}
+                    border:1px solid #eef2f7; border-radius:16px;
+                    padding:10px 16px; background:#fff;
+                    box-shadow:0 4px 12px rgba(7,26,61,.08); }}
       .sb-item {{ display:flex; align-items:center; gap:8px; }}
       .sb-label {{ font-size:.72rem; letter-spacing:.1em; text-transform:uppercase;
                    color:#9ca3af; font-weight:700; }}
@@ -202,8 +207,10 @@ home = S.team_stats(events, "Home")
 away = S.team_stats(events, "Away")
 players = S.player_stats(events)
 
+st.markdown(brand.header_html(), unsafe_allow_html=True)
+
 match_name = (state.get("match_name") or "").strip()
-with st.popover(match_name or "KickoffAI"):
+with st.popover(match_name or brand.NAME):
     st.caption("Name this match / session")
     new_name = st.text_input(
         "Match name", value=match_name,

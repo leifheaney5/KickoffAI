@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# kickoff.sh — KickoffAI's one-button launcher.
+# kickoff.sh — Kickoff Pulse's one-button launcher.
 #
 #   ./kickoff.sh
 #
@@ -22,7 +22,7 @@ yellow() { printf '\033[0;33m%s\033[0m\n' "$1"; }
 red() { printf '\033[0;31m%s\033[0m\n' "$1"; }
 
 echo "================================================================"
-green "  KickoffAI — starting up"
+green "  Kickoff Pulse — starting up"
 echo "================================================================"
 
 # --------------------------------------------------------------------------- #
@@ -78,7 +78,7 @@ STREAMLIT_PID=""
 
 cleanup() {
   echo ""
-  yellow "Shutting down KickoffAI..."
+  yellow "Shutting down Kickoff Pulse..."
   [ -n "$STREAMLIT_PID" ] && kill "$STREAMLIT_PID" 2>/dev/null || true
   [ -n "$AUDIO_PID" ] && kill "$AUDIO_PID" 2>/dev/null || true
   # Give them a moment, then force if needed.

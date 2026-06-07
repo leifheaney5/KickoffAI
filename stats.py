@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-KickoffAI — shared stat engine.
+Kickoff Pulse — shared stat engine.
 
 Pure functions used by both the dashboard and the report generator, so the
 aggregation logic lives in exactly one place.

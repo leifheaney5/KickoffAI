@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-KickoffAI — shared event iconography.
+Kickoff Pulse — shared event iconography.
 
 A single source of truth for how each event is categorised, coloured, and
 labelled, so the interactive timeline (SVG) and the exported timeline image
 (Pillow) stay visually consistent. No emojis — clean geometric glyphs only.
 """
 
-HOME_COLOR = "#2563eb"
-AWAY_COLOR = "#dc2626"
+HOME_COLOR = "#1E7BFF"   # Pulse Blue (brand)
+AWAY_COLOR = "#DC2626"   # red
 NEUTRAL = "#9ca3af"
 
 # Category -> badge fill colour
@@ -16,7 +16,7 @@ KIND_COLOR = {
     "goal": "#16a34a",
     "yellow": "#eab308",
     "red": "#dc2626",
-    "sub": "#0ea5e9",
+    "sub": "#4DA3FF",
     "save": "#0891b2",
     "shot": "#6366f1",
     "foul": "#f97316",
