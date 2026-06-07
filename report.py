@@ -69,7 +69,7 @@ def _collect(events):
 # --------------------------------------------------------------------------- #
 # Plain-text report
 # --------------------------------------------------------------------------- #
-def build_text(events, data, summary, clock) -> str:
+def build_text(events, data, summary, clock, match_name="") -> str:
     home, away = data["home"], data["away"]
     hp, ap = data["possession"]
     L = []
@@ -81,6 +81,9 @@ def build_text(events, data, summary, clock) -> str:
     rule()
     L.append("KICKOFF AI  -  MATCH REPORT".center(w))
     rule()
+    if match_name:
+        L.append(match_name.center(w))
+        L.append("")
     L.append(f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     if clock:
         L.append(f"Match clock: {clock}")
@@ -150,7 +153,8 @@ def build_text(events, data, summary, clock) -> str:
 # --------------------------------------------------------------------------- #
 # PDF report
 # --------------------------------------------------------------------------- #
-def build_pdf(events, data, summary, clock, path, timeline_png=None):
+def build_pdf(events, data, summary, clock, path, timeline_png=None,
+              match_name=""):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
@@ -169,7 +173,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None):
 
     # Header
     text("KICKOFF AI", 22, "B", HOME_RGB, h=10)
-    text("Match Report", 13, "", MUTED, h=7)
+    text(match_name or "Match Report", 13, "", MUTED, h=7)
     meta = f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     if clock:
         meta += f"   |   Match clock {clock}"
@@ -316,7 +320,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None):
 # Entry point
 # --------------------------------------------------------------------------- #
 def generate(events=None, summary="", clock="", out_dir=None,
-             data_file=None, archive=True) -> dict:
+             data_file=None, archive=True, match_name="") -> dict:
     """Generate txt + pdf reports (and archive data). Returns the paths."""
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
@@ -339,8 +343,9 @@ def generate(events=None, summary="", clock="", out_dir=None,
         png_path = None
 
     with open(txt_path, "w", encoding="utf-8") as fh:
-        fh.write(build_text(events, data, summary, clock))
-    build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path)
+        fh.write(build_text(events, data, summary, clock, match_name))
+    build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
+              match_name=match_name)
 
     result = {"txt": txt_path, "pdf": pdf_path, "events": len(events)}
     if png_path:
@@ -357,7 +362,8 @@ if __name__ == "__main__":
     state = control.load_control()
     main_clk, added, half = control.clock_label(state["timer"])
     clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
-    paths = generate(summary=state.get("summary", ""), clock=clock)
+    paths = generate(summary=state.get("summary", ""), clock=clock,
+                     match_name=state.get("match_name", ""))
     print("Report written:")
     for k, v in paths.items():
         print(f"  {k}: {v}")

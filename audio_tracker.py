@@ -260,7 +260,7 @@ def append_event(record: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(events, fh, indent=2)
-        os.replace(tmp_path, DATA_FILE)
+        control.atomic_replace(tmp_path, DATA_FILE)
     except Exception:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

@@ -63,6 +63,15 @@ st.markdown(
               font-weight: 700; color: white; }}
       .t {{ color:#9ca3af; font-variant-numeric: tabular-nums; margin: 0 8px; }}
 
+      /* Editable match title: make the popover trigger look like the H1 */
+      div[data-testid="stPopover"] button {{
+        border:none !important; background:transparent !important;
+        padding:0 !important; box-shadow:none !important; color:inherit; }}
+      div[data-testid="stPopover"] button:hover p {{ color:{HOME}; }}
+      div[data-testid="stPopover"] button p {{
+        font-size:2.25rem !important; font-weight:800 !important;
+        letter-spacing:-0.01em; line-height:1.1; }}
+
       /* Recording status bar */
       .statusbar {{ display:flex; align-items:center; gap:18px; flex-wrap:wrap;
                     border:1px solid #e5e7eb; border-radius:12px;
@@ -193,8 +202,24 @@ home = S.team_stats(events, "Home")
 away = S.team_stats(events, "Away")
 players = S.player_stats(events)
 
-st.markdown("# KickoffAI")
-st.caption(f"Live match tracker · {len(events)} events logged")
+match_name = (state.get("match_name") or "").strip()
+with st.popover(match_name or "KickoffAI"):
+    st.caption("Name this match / session")
+    new_name = st.text_input(
+        "Match name", value=match_name,
+        placeholder="e.g. Eagles vs Hawks — Jun 7",
+        label_visibility="collapsed", key="match_name_input")
+    s1, s2 = st.columns(2)
+    if s1.button("Save name", type="primary", width='stretch'):
+        state["match_name"] = new_name.strip()
+        control.save_control(state)
+        st.rerun()
+    if match_name and s2.button("Clear", width='stretch'):
+        state["match_name"] = ""
+        control.save_control(state)
+        st.rerun()
+st.caption(f"Live match tracker · click the title to rename · "
+           f"{len(events)} events logged")
 
 # Recording indicator bar — its own lightweight 1s fragment so the glow/timer
 # tick smoothly without rerunning the controls below.
@@ -419,7 +444,8 @@ with right:
             main_clk, added, half = control.clock_label(state["timer"])
             clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
             paths = report.generate(events=events,
-                                    summary=state.get("summary", ""), clock=clk)
+                                    summary=state.get("summary", ""), clock=clk,
+                                    match_name=state.get("match_name", ""))
             st.session_state["report_paths"] = paths
             st.success(f"Report generated · {paths['events']} events")
         except Exception as exc:

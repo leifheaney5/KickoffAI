@@ -66,8 +66,10 @@ main_clk, added, half = control.clock_label(state["timer"])
 clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
 score = (home["Goals"], away["Goals"])
 
-st.markdown("# Match Timeline")
-st.caption(f"Home {score[0]} - {score[1]} Away   ·   {clock}   ·   "
+match_name = (state.get("match_name") or "").strip()
+st.markdown(f"# {match_name}" if match_name else "# Match Timeline")
+st.caption(f"{'Match Timeline · ' if match_name else ''}"
+           f"Home {score[0]} - {score[1]} Away   ·   {clock}   ·   "
            f"{len(events)} events")
 
 if not events:
@@ -179,3 +181,27 @@ for i, e in enumerate(shown):
             st.markdown(rows, unsafe_allow_html=True)
             if e.get("raw_text"):
                 st.caption(f'Heard: "{e["raw_text"]}"')
+
+            # --- Delete (two-step confirm) --------------------------------- #
+            ts = e.get("timestamp")
+            uid = ts or f"idx{i}"
+            confirm_key = f"confirm_del_{uid}"
+            if st.session_state.get(confirm_key):
+                st.warning("Delete this event? This can't be undone.")
+                yes, no, _ = st.columns([1, 1, 3])
+                if yes.button("Confirm delete", key=f"yes_{uid}",
+                              type="primary", width='stretch'):
+                    if S.delete_event(ts):
+                        st.toast("Event deleted.")
+                    else:
+                        st.toast("Couldn't find that event — it may already "
+                                 "be gone.")
+                    st.session_state.pop(confirm_key, None)
+                    st.session_state.pop("tl_png", None)  # stale image
+                    st.rerun()
+                if no.button("Cancel", key=f"no_{uid}", width='stretch'):
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
+            elif st.button("🗑 Delete event", key=f"del_{uid}"):
+                st.session_state[confirm_key] = True
+                st.rerun()

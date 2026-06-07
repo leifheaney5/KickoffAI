@@ -1,3 +1,9 @@
+[theme]
+# The dashboard/timeline CSS is built for light surfaces (#fff cards & feed).
+# Pin the light theme so it doesn't follow the OS into dark mode, which made
+# the default text white and invisible on those light backgrounds.
+base = "light"
+
 [browser]
 gatherUsageStats = false
 

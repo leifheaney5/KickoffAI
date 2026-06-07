@@ -24,8 +24,28 @@ STATUS_FILE = os.environ.get("KICKOFF_STATUS_FILE", "status.json")
 FIRST_HALF_SECONDS = 45 * 60
 FULL_TIME_SECONDS = 90 * 60
 
+
+def atomic_replace(tmp: str, dst: str, attempts: int = 40,
+                   delay: float = 0.05) -> None:
+    """os.replace, retried for Windows.
+
+    On POSIX, renaming over an open file is fine. On Windows a process that has
+    the destination open for reading (the dashboard polls these JSON files
+    constantly) makes the rename fail with PermissionError/WinError 5. Those
+    reads are sub-millisecond, so a short retry loop clears the contention.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(tmp, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay)
+
 DEFAULT = {
     "paused": False,
+    "match_name": "",
     "timer": {
         "running": False,
         "start_epoch": None,   # wall-clock time when the clock was last started
@@ -57,7 +77,7 @@ def save_control(state: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(state, fh, indent=2)
-        os.replace(tmp, CONTROL_FILE)
+        atomic_replace(tmp, CONTROL_FILE)
     except Exception:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -157,7 +177,7 @@ def save_status(status: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(status, fh)
-        os.replace(tmp, STATUS_FILE)
+        atomic_replace(tmp, STATUS_FILE)
     except Exception:
         if os.path.exists(tmp):
             os.remove(tmp)

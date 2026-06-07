@@ -8,7 +8,10 @@ aggregation logic lives in exactly one place.
 
 import json
 import os
+import tempfile
 from collections import Counter
+
+import control
 
 DATA_FILE = os.environ.get("KICKOFF_DATA_FILE", "match_data.json")
 
@@ -38,6 +41,42 @@ def load_events(path: str = None) -> list:
         return data if isinstance(data, list) else []
     except (ValueError, OSError):
         return []
+
+
+def save_events(events: list, path: str = None) -> None:
+    """Atomically rewrite the match data file (rename is atomic).
+
+    Mirrors the tracker's write path so the two never leave a half-written file.
+    """
+    path = path or DATA_FILE
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(events, fh, indent=2)
+        control.atomic_replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def delete_event(timestamp: str, path: str = None) -> bool:
+    """Delete the event with the given (unique) timestamp.
+
+    Returns True if an event was removed. Re-reads the file first so a delete
+    from the dashboard/timeline keeps any events the tracker logged in the
+    meantime.
+    """
+    if not timestamp:
+        return False
+    path = path or DATA_FILE
+    events = load_events(path)
+    remaining = [e for e in events if e.get("timestamp") != timestamp]
+    if len(remaining) == len(events):
+        return False
+    save_events(remaining, path)
+    return True
 
 
 def _res(event: dict) -> str:
