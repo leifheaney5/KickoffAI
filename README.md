@@ -90,6 +90,18 @@ team-coloured ring. Click any event to expand its full details, filter by event
 type, flip the order, and **export the timeline as a PNG**. The same image is
 embedded into the exported PDF report.
 
+### Insights page
+
+A third page turns the event log into analysis:
+
+- A **momentum graph** — a decaying, weighted read on who is pressing and when
+  the game swung (above the line = Home, below = Away).
+- **Headline numbers** — shots, shots on target, conversion, and the current
+  momentum leader.
+- An **AI analyst** you can ask anything about the match ("Who's on top?",
+  "What should the trailing team change?") — answered **locally** by the Ollama
+  model from the live data, with quick one-tap prompts and a chat box.
+
 ## Requirements
 
 - macOS on Apple Silicon (Intel works too via the openai-whisper fallback)
@@ -108,6 +120,9 @@ embedded into the exported PDF report.
 | `audio_tracker.py` | Listens, transcribes, parses via Ollama, writes events |
 | `dashboard.py`     | Streamlit real-time dashboard (clock, stats, controls) |
 | `pages/1_Match_Timeline.py` | Visual, clickable timeline page + image export |
+| `pages/2_Match_Insights.py` | Momentum graph + local AI match analyst |
+| `insights.py`      | Momentum engine + AI analyst context builder |
+| `brand.py`         | Brand kit: palette, fonts, logo assets, design-system CSS |
 | `stats.py`         | Shared stat engine (team + player aggregation) |
 | `control.py`       | Shared state: pause flag, match timer, summary notes |
 | `icons.py`         | Shared event categories, colours, and SVG icon badges |
