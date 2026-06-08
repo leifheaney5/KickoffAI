@@ -35,14 +35,19 @@ st.markdown(
       .block-container { max-width: 1100px; }
       /* tighten the gap between timeline rows so the rail looks continuous */
       div[data-testid="stHorizontalBlock"] { gap: 0 !important; }
-      .stExpander { border: 1px solid #eceef1 !important; border-radius: 10px !important; }
-      .det { display:flex; justify-content:space-between; padding:4px 0;
-             border-bottom:1px solid #f1f3f5; font-size:.95rem; }
+      /* Glass expanders on the dark theme */
+      [data-testid="stExpander"] { background: var(--glass) !important;
+            border: 1px solid var(--glass-bd) !important; border-radius: 12px !important;
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+      [data-testid="stExpander"] summary { color: var(--txt) !important; }
+      [data-testid="stExpander"] summary:hover { color: var(--accent) !important; }
+      .det { display:flex; justify-content:space-between; padding:5px 0;
+             border-bottom:1px solid rgba(255,255,255,.08); font-size:.95rem; }
       .det:last-child { border-bottom:none; }
-      .det .k { color:#6b7280; }
-      .legend { display:flex; flex-wrap:wrap; gap:14px; margin:4px 0 2px; }
+      .det .k { color:var(--muted); }
+      .legend { display:flex; flex-wrap:wrap; gap:14px; margin:4px 0 8px; }
       .legend .item { display:flex; align-items:center; gap:6px; font-size:.85rem;
-                      color:#4b5563; }
+                      color:var(--muted); }
     </style>
     """,
     unsafe_allow_html=True,
@@ -159,7 +164,7 @@ for i, e in enumerate(shown):
     rail_col, body_col = st.columns([0.09, 0.91])
     with rail_col:
         line = ("" if last else
-                "<div style='width:2px;background:#e5e7eb;flex:1;"
+                "<div style='width:2px;background:rgba(255,255,255,.18);flex:1;"
                 "min-height:40px;margin-top:2px'></div>")
         st.markdown(
             f"<div style='display:flex;flex-direction:column;align-items:center;"
