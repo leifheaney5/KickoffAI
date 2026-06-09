@@ -103,15 +103,13 @@ def headline_metrics(events: list, home: dict, away: dict) -> dict:
     }
 
 
-def build_context(events: list, home: dict, away: dict, possession, clock="") -> str:
+def build_context(events: list, home: dict, away: dict, clock="") -> str:
     """Compact, model-friendly snapshot of the match for the AI analyst."""
-    hp, ap = possession
     lines = []
     if clock:
         lines.append(f"Match clock: {clock}")
     lines += [
         f"Score: Home {home['Goals']} - {away['Goals']} Away.",
-        f"Possession: Home {hp}% / Away {ap}%.",
         f"Shots H{home['Shots']}/A{away['Shots']} "
         f"(on target H{home['On Target']}/A{away['On Target']}).",
         f"Saves H{home['Saves']}/A{away['Saves']}, "
@@ -119,9 +117,7 @@ def build_context(events: list, home: dict, away: dict, possession, clock="") ->
         f"Fouls H{home['Fouls']}/A{away['Fouls']}.",
         f"Cards: Home {home['Yellow Cards']}Y/{home['Red Cards']}R, "
         f"Away {away['Yellow Cards']}Y/{away['Red Cards']}R.",
-        f"Corners H{home['Corners']}/A{away['Corners']}, "
-        f"Passes H{home['Passes']}/A{away['Passes']} "
-        f"(accuracy H{home['Pass %']}%/A{away['Pass %']}%).",
+        f"Corners H{home['Corners']}/A{away['Corners']}.",
     ]
     leader, strength = momentum_leader(events)
     if leader:

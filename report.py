@@ -61,7 +61,6 @@ def _collect(events):
     return {
         "home": home,
         "away": away,
-        "possession": S.possession(home, away),
         "players": S.player_stats(events),
         "subs": [e for e in events if e.get("action") == "substitution"],
     }
@@ -72,7 +71,6 @@ def _collect(events):
 # --------------------------------------------------------------------------- #
 def build_text(events, data, summary, clock, match_name="") -> str:
     home, away = data["home"], data["away"]
-    hp, ap = data["possession"]
     L = []
     w = 56
 
@@ -91,15 +89,12 @@ def build_text(events, data, summary, clock, match_name="") -> str:
     L.append(f"Events    : {len(events)}")
     L.append("")
     L.append(f"FINAL SCORE   HOME {home['Goals']}  -  {away['Goals']} AWAY")
-    L.append(f"POSSESSION    Home {hp}%   |   Away {ap}%")
     L.append("")
     rule("-")
     L.append(f"{'HOME':>10}   {'STAT':^18}   {'AWAY':<10}")
     rule("-")
-    for k in S.STAT_KEYS + ["Pass %"]:
-        hv = f"{home[k]}{'%' if k == 'Pass %' else ''}"
-        av = f"{away[k]}{'%' if k == 'Pass %' else ''}"
-        L.append(f"{hv:>10}   {k:^18}   {av:<10}")
+    for k in S.STAT_KEYS:
+        L.append(f"{home[k]:>10}   {k:^18}   {away[k]:<10}")
     L.append("")
 
     # Player stats
@@ -108,7 +103,7 @@ def build_text(events, data, summary, clock, match_name="") -> str:
         rule("-")
         L.append("PLAYER STATS")
         rule("-")
-        header = f"{'Player':<14}{'Team':<6}{'G':>3}{'Sh':>4}{'Tk':>4}{'Fl':>4}{'Y':>3}{'R':>3}{'Pass':>6}"
+        header = f"{'Player':<14}{'Team':<6}{'G':>3}{'Sh':>4}{'Tk':>4}{'Fl':>4}{'Y':>3}{'R':>3}"
         L.append(header)
         ordered = sorted(players.items(),
                          key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
@@ -117,7 +112,7 @@ def build_text(events, data, summary, clock, match_name="") -> str:
             L.append(
                 f"{name[:13]:<14}{(p['Team'] or '-')[:5]:<6}"
                 f"{p['Goals']:>3}{p['Shots']:>4}{p['Tackles']:>4}"
-                f"{p['Fouls']:>4}{p['Yellow Cards']:>3}{p['Red Cards']:>3}{p['Passes']:>6}"
+                f"{p['Fouls']:>4}{p['Yellow Cards']:>3}{p['Red Cards']:>3}"
             )
         L.append("")
 
@@ -160,7 +155,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     from fpdf.enums import XPos, YPos
 
     home, away = data["home"], data["away"]
-    hp, ap = data["possession"]
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -213,21 +207,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.ln(6)
 
-    # Possession bar
-    text("Possession", 11, "B", INK, h=7)
-    bx, by, bh = pdf.l_margin, pdf.get_y(), 7
-    hw = epw * (hp / 100.0)
-    pdf.set_fill_color(*HOME_RGB)
-    pdf.rect(bx, by, hw, bh, style="F")
-    pdf.set_fill_color(*AWAY_RGB)
-    pdf.rect(bx + hw, by, epw - hw, bh, style="F")
-    pdf.set_xy(bx, by)
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(hw, bh, f" {hp}%", align="L")
-    pdf.cell(epw - hw, bh, f"{ap}% ", align="R")
-    pdf.ln(bh + 4)
-
     # Team comparison table
     def stat_row(label, hv, av, header=False):
         pdf.set_x(pdf.l_margin)
@@ -244,17 +223,16 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
 
     text("Team Stats", 13, "B", INK, h=8)
     stat_row("HOME", "", "AWAY", header=True)
-    for k in S.STAT_KEYS + ["Pass %"]:
-        suffix = "%" if k == "Pass %" else ""
-        stat_row(k, f"{home[k]}{suffix}", f"{away[k]}{suffix}")
+    for k in S.STAT_KEYS:
+        stat_row(k, str(home[k]), str(away[k]))
     pdf.ln(4)
 
     # Player stats table
     players = data["players"]
     if players:
         text("Player Stats", 13, "B", INK, h=8)
-        cols = [("Player", 0.26), ("Team", 0.12), ("G", 0.09), ("Sh", 0.09),
-                ("Tk", 0.09), ("Fl", 0.09), ("Y", 0.08), ("R", 0.08), ("Pass", 0.10)]
+        cols = [("Player", 0.28), ("Team", 0.13), ("G", 0.10), ("Sh", 0.10),
+                ("Tk", 0.10), ("Fl", 0.10), ("Y", 0.10), ("R", 0.09)]
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*INK)
@@ -267,8 +245,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         pdf.set_font("Helvetica", "", 9)
         for nm, p in ordered:
             vals = [nm[:16], p["Team"] or "-", p["Goals"], p["Shots"],
-                    p["Tackles"], p["Fouls"], p["Yellow Cards"],
-                    p["Red Cards"], p["Passes"]]
+                    p["Tackles"], p["Fouls"], p["Yellow Cards"], p["Red Cards"]]
             pdf.set_x(pdf.l_margin)
             for (name, frac), v in zip(cols, vals):
                 pdf.cell(epw * frac, 6, str(v), border="B",

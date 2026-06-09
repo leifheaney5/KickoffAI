@@ -17,16 +17,10 @@ DATA_FILE = os.environ.get("KICKOFF_DATA_FILE", "match_data.json")
 
 TEAMS = ("Home", "Away")
 
-# Results that count as a "successful" action for the possession estimate.
-POSITIVE_RESULTS = {
-    "complete", "scored", "on target", "saved", "won",
-    "successful", "blocked",  # a block is a successful defensive action
-}
-
 # Stat rows shown for each team / player, in display order.
 STAT_KEYS = [
     "Goals", "Shots", "On Target", "Saves", "Tackles", "Fouls",
-    "Yellow Cards", "Red Cards", "Corners", "Offsides", "Passes",
+    "Yellow Cards", "Red Cards", "Corners", "Offsides",
 ]
 
 
@@ -98,10 +92,6 @@ def aggregate(rows: list) -> dict:
         return e.get("action") == "shot" and _res(e) in {"on target", "scored", "saved"}
 
     goals = sum(1 for e in rows if e.get("action") == "goal" or _res(e) == "scored")
-    passes = sum(1 for a in actions if a == "pass")
-    passes_complete = sum(
-        1 for e in rows if e.get("action") == "pass" and _res(e) == "complete"
-    )
 
     return {
         "Goals": goals,
@@ -114,14 +104,7 @@ def aggregate(rows: list) -> dict:
         "Red Cards": card("red"),
         "Corners": sum(1 for a in actions if a == "corner"),
         "Offsides": sum(1 for a in actions if a == "offside"),
-        "Passes": passes,
         "Subs": sum(1 for a in actions if a == "substitution"),
-        "Pass %": round(100 * passes_complete / passes) if passes else 0,
-        "_successful": sum(
-            1 for e in rows
-            if _res(e) in POSITIVE_RESULTS
-            or e.get("action") in {"pass", "dribble", "cross"}
-        ),
     }
 
 
@@ -146,9 +129,3 @@ def player_stats(events: list) -> dict:
     return players
 
 
-def possession(home: dict, away: dict):
-    h, a = home["_successful"], away["_successful"]
-    total = h + a
-    if total == 0:
-        return 50.0, 50.0
-    return round(100 * h / total, 1), round(100 * a / total, 1)

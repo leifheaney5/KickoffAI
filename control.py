@@ -53,6 +53,10 @@ DEFAULT = {
         "second_half": False,
     },
     "summary": "",
+    "teams": {
+        "home": {"name": "", "lineup": ""},
+        "away": {"name": "", "lineup": ""},
+    },
 }
 
 
@@ -67,6 +71,11 @@ def load_control() -> dict:
             data = {}
     merged = {**DEFAULT, **(data if isinstance(data, dict) else {})}
     merged["timer"] = {**DEFAULT["timer"], **merged.get("timer", {})}
+    saved_teams = merged.get("teams", {})
+    merged["teams"] = {
+        "home": {**DEFAULT["teams"]["home"], **saved_teams.get("home", {})},
+        "away": {**DEFAULT["teams"]["away"], **saved_teams.get("away", {})},
+    }
     return merged
 
 

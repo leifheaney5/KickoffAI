@@ -30,23 +30,6 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 st.set_page_config(page_title=f"{brand.NAME} — Insights",
                    page_icon=brand.LOGO_TRANSPARENT, layout="wide")
 st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(
-    """
-    <style>
-      .kp-ana { display:flex; flex-direction:column; }
-      .kp-msg { border-radius:14px; padding:11px 16px; margin:6px 0; max-width:86%;
-                line-height:1.5; animation:kpFade .3s ease both; }
-      .kp-msg.user { align-self:flex-end; color:#fff;
-            background:linear-gradient(135deg, rgba(30,123,255,.32), rgba(43,231,255,.18));
-            border:1px solid rgba(43,231,255,.36); }
-      .kp-msg.ai { align-self:flex-start; color:var(--txt);
-            background:var(--glass); border:1px solid var(--glass-bd); }
-      .kp-msg .who { font-family:var(--fd); font-size:.64rem; letter-spacing:.14em;
-            text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 HOME, AWAY = brand.HOME, brand.AWAY
 
@@ -57,15 +40,14 @@ events = S.load_events()
 state = control.load_control()
 home = S.team_stats(events, "Home")
 away = S.team_stats(events, "Away")
-poss = S.possession(home, away)
 main_clk, added, half = control.clock_label(state["timer"])
 clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
 match_name = (state.get("match_name") or "").strip()
 
-st.markdown(brand.header_html(), unsafe_allow_html=True)
-st.markdown(f"# {match_name or 'Match Insights'}")
-st.caption(f"AI analysis · Home {home['Goals']}–{away['Goals']} Away · {clock} · "
-           f"{len(events)} events")
+st.markdown(
+    brand.page_header("ANALYSIS", match_name or "Insights"),
+    unsafe_allow_html=True)
+st.caption(f"AI analysis  ·  Home {home['Goals']}–{away['Goals']} Away  ·  {clock}  ·  {len(events)} events")
 
 if not events:
     st.info("No events yet. Narrate the match on the dashboard, then come back "
@@ -153,7 +135,7 @@ def ask_analyst(question: str, context: str) -> str:
 
 
 def run_query(q: str):
-    ctx = IN.build_context(events, home, away, poss, clock)
+    ctx = IN.build_context(events, home, away, clock)
     st.session_state.kp_chat.append(("user", q))
     try:
         with st.spinner("Analyzing the match…"):

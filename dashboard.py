@@ -62,31 +62,33 @@ def event_summary(e):
 
 
 def team_chip(team) -> str:
-    color = HOME if team == "Home" else AWAY if team == "Away" else "#5b6e92"
-    return f"<span class='chip' style='background:{color}'>{team or '—'}</span>"
+    if team == "Home":
+        return ("<span class='team-chip' style='color:var(--c-home2);"
+                "border-color:rgba(30,123,255,.4);background:rgba(30,123,255,.12)'>HOME</span>")
+    if team == "Away":
+        return ("<span class='team-chip' style='color:#FF6B6B;"
+                "border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.12)'>AWAY</span>")
+    return ("<span class='team-chip' style='color:var(--c-muted);"
+            "border-color:var(--border);background:rgba(255,255,255,.05)'>—</span>")
 
 
-def diverging_bar(h, a, show_pct=False) -> str:
-    """Two-segment home/away bar sized by share of (h + a)."""
+def cmp_row(label: str, h, a) -> str:
+    """Wireframe-style diverging comparison row: value | bar | value."""
     h = h or 0
     a = a or 0
     total = h + a
     hp = (h / total * 100) if total else 0
     ap = (a / total * 100) if total else 0
-    ht = f"{round(hp)}%" if show_pct else ""
-    at = f"{round(ap)}%" if show_pct else ""
-    hseg = f"<div class='seg home' style='width:{hp:.1f}%'>{ht}</div>" if hp else ""
-    aseg = f"<div class='seg away' style='width:{ap:.1f}%'>{at}</div>" if ap else ""
-    return f"<div class='kp-bar'>{hseg}{aseg}</div>"
-
-
-def h2h_row(label, h, a, suffix="") -> str:
     return (
-        f"<div class='h2h'><div class='h2h-top'>"
-        f"<span class='n home'>{h}{suffix}</span>"
-        f"<span class='lbl'>{label}</span>"
-        f"<span class='n away'>{a}{suffix}</span></div>"
-        f"{diverging_bar(h, a)}</div>"
+        f"<div class='cmp-row'>"
+        f"<span class='cmp-val home'>{h}</span>"
+        f"<div class='cmp-bars'>"
+        f"<div class='cmp-left'><div class='cmp-fill home' style='width:{hp:.0f}%'></div></div>"
+        f"<span class='cmp-mid'>{label}</span>"
+        f"<div class='cmp-right'><div class='cmp-fill away' style='width:{ap:.0f}%'></div></div>"
+        f"</div>"
+        f"<span class='cmp-val away'>{a}</span>"
+        f"</div>"
     )
 
 
@@ -94,11 +96,10 @@ def ai_summary(events):
     """Ask the local model to write a short, neutral match summary."""
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
-    hp, ap = S.possession(home, away)
     facts = (
         f"Final score: Home {home['Goals']} - {away['Goals']} Away. "
         f"Shots {home['Shots']}-{away['Shots']} (on target "
-        f"{home['On Target']}-{away['On Target']}). Possession {hp}%-{ap}%. "
+        f"{home['On Target']}-{away['On Target']}). "
         f"Fouls {home['Fouls']}-{away['Fouls']}. "
         f"Cards: Home {home['Yellow Cards']}Y/{home['Red Cards']}R, "
         f"Away {away['Yellow Cards']}Y/{away['Red Cards']}R. "
@@ -161,67 +162,87 @@ def render_scoreboard():
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
     main_clk, added, half = control.clock_label(state["timer"])
-    hp, ap = S.possession(home, away)
+
+    teams = state.get("teams", {})
+    home_name = teams.get("home", {}).get("name", "").strip() or "Home"
+    away_name = teams.get("away", {}).get("name", "").strip() or "Away"
 
     added_html = f"<span class='added'> {added}</span>" if added else ""
-    half_lbl = half + ("  ·  ADDED TIME" if added else "")
+    half_lbl = (half + ("  ·  ADDED TIME" if added else "")).upper()
     st.markdown(
-        f"<div class='kp-card kp-board'>"
-        f"<div class='side'><div class='team home'>Home</div>"
-        f"<div class='sc home'>{home['Goals']}</div></div>"
-        f"<div class='center'>"
-        f"<div class='kp-half'>{half_lbl}</div>"
-        f"<div class='kp-clock'>{main_clk}{added_html}</div>"
-        f"<div style='margin-top:16px'>{diverging_bar(hp, ap, show_pct=True)}"
-        f"<div class='kp-cap'>Possession</div></div>"
+        f"<div class='panel scoreboard'>"
+        f"<div class='sb-side sb-home'>"
+        f"<div class='sb-team'>{home_name}</div>"
+        f"<div class='sb-score'>{home['Goals']}</div>"
         f"</div>"
-        f"<div class='side'><div class='team away'>Away</div>"
-        f"<div class='sc away'>{away['Goals']}</div></div>"
+        f"<div class='sb-center'>"
+        f"<div class='sb-half'>{half_lbl}</div>"
+        f"<div class='sb-clock'>{main_clk}{added_html}</div>"
+        f"</div>"
+        f"<div class='sb-side sb-away'>"
+        f"<div class='sb-team'>{away_name}</div>"
+        f"<div class='sb-score'>{away['Goals']}</div>"
+        f"</div>"
         f"</div>",
         unsafe_allow_html=True)
 
 
 def render_stats_feed():
     events = S.load_events()
+    state = control.load_control()
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
     players = S.player_stats(events)
+
+    teams = state.get("teams", {})
+    home_label = teams.get("home", {}).get("name", "").strip().upper() or "HOME"
+    away_label = teams.get("away", {}).get("name", "").strip().upper() or "AWAY"
 
     col_stats, col_feed = st.columns([1.05, 1], gap="large")
 
     # ---- Team comparison (head-to-head) -------------------------------- #
     with col_stats:
-        st.markdown(brand.section("Team comparison"), unsafe_allow_html=True)
-        rows = "".join(h2h_row(k, home[k], away[k]) for k in S.STAT_KEYS)
-        rows += h2h_row("Pass accuracy", home["Pass %"], away["Pass %"], suffix="%")
+        st.markdown(brand.section("Team comparison", "TEAM STATS"), unsafe_allow_html=True)
+        legend = (
+            f"<div class='cmp-legend'>"
+            f"<span><span class='cmp-dot home'></span>{home_label}</span>"
+            f"<span><span class='cmp-dot away'></span>{away_label}</span>"
+            f"</div>"
+        )
+        rows = "".join(cmp_row(k, home[k], away[k]) for k in S.STAT_KEYS)
         st.markdown(
-            f"<div class='kp-card'>"
-            f"<div class='h2h-top' style='margin-bottom:10px'>"
-            f"<span class='n home' style='color:{HOME}'>HOME</span>"
-            f"<span class='lbl' style='font-weight:800'>Stat</span>"
-            f"<span class='n away' style='color:{AWAY}'>AWAY</span></div>"
-            f"{rows}</div>",
+            f"<div class='panel'>{legend}"
+            f"<div class='cmp-rows'>{rows}</div>"
+            f"</div>",
             unsafe_allow_html=True)
 
     # ---- Live feed ----------------------------------------------------- #
     with col_feed:
-        st.markdown(brand.section("Live feed"), unsafe_allow_html=True)
+        st.markdown(brand.section("Live feed", "REAL-TIME"), unsafe_allow_html=True)
         if not events:
             st.info("No events yet. Start narrating the match into your mic.")
         else:
-            for e in reversed(events[-20:]):
-                st.markdown(
-                    f"<div class='kp-feed'>{IC.badge_html(e, 32)}"
-                    f"<div class='body'><div class='top'>{team_chip(e.get('team'))}"
-                    f"<span class='t'>{event_time(e)}</span></div>"
-                    f"<div class='sum'>{event_summary(e)}</div></div></div>",
-                    unsafe_allow_html=True)
+            feed_items = "".join(
+                f"<div class='feed-item'>{IC.badge_html(e, 32)}"
+                f"<div class='feed-body'>"
+                f"<div class='feed-meta'>"
+                f"<span class='feed-type'>{IC.KIND_LABEL.get(IC.event_kind(e), 'Event')}</span>"
+                f"{team_chip(e.get('team'))}"
+                f"<span class='feed-time'>{event_time(e)}</span>"
+                f"</div>"
+                f"<div class='feed-desc'>{event_summary(e)}</div>"
+                f"</div></div>"
+                for e in reversed(events[-20:])
+            )
+            st.markdown(f"<div class='panel' style='padding:12px'>"
+                        f"<div class='feed-list'>{feed_items}</div></div>",
+                        unsafe_allow_html=True)
 
     # ---- Players ------------------------------------------------------- #
     st.write("")
-    st.markdown(brand.section("Player stats"), unsafe_allow_html=True)
+    st.markdown(brand.section("Player stats", "PER PLAYER"), unsafe_allow_html=True)
     if players:
-        cols = ["Team"] + S.STAT_KEYS + ["Pass %"]
+        cols = ["Team"] + S.STAT_KEYS
         df = pd.DataFrame(
             {p: {c: v.get(c) for c in cols} for p, v in players.items()}).T
         df = df.reindex(columns=cols)
@@ -233,8 +254,8 @@ def render_stats_feed():
         if pick and pick in players:
             p = players[pick]
             accent = HOME if p["Team"] == "Home" else AWAY
-            keys = ["Goals", "Shots", "On Target", "Tackles", "Fouls",
-                    "Yellow Cards", "Red Cards", "Passes"]
+            keys = ["Goals", "Shots", "On Target", "Saves", "Tackles", "Fouls",
+                    "Yellow Cards", "Red Cards"]
             chips = "".join(
                 f"<div class='row'><span>{k}</span><span class='v'>{p[k]}</span></div>"
                 for k in keys)
@@ -251,14 +272,19 @@ def render_stats_feed():
     subs = [e for e in events if e.get("action") == "substitution"]
     if subs:
         st.write("")
-        st.markdown(brand.section("Substitutions"), unsafe_allow_html=True)
-        for e in subs:
-            st.markdown(
-                f"<div class='kp-feed'>{IC.badge_html(e, 30)}"
-                f"<div class='body'><div class='top'>{team_chip(e.get('team'))}"
-                f"<span class='t'>{event_time(e)}</span></div>"
-                f"<div class='sum'>{e.get('player') or 'unknown'} comes on</div>"
-                f"</div></div>", unsafe_allow_html=True)
+        st.markdown(brand.section("Substitutions", "SUBS"), unsafe_allow_html=True)
+        sub_items = "".join(
+            f"<div class='feed-item'>{IC.badge_html(e, 30)}"
+            f"<div class='feed-body'>"
+            f"<div class='feed-meta'>{team_chip(e.get('team'))}"
+            f"<span class='feed-time'>{event_time(e)}</span></div>"
+            f"<div class='feed-desc'>{e.get('player') or 'unknown'} comes on</div>"
+            f"</div></div>"
+            for e in subs
+        )
+        st.markdown(f"<div class='panel' style='padding:12px'>"
+                    f"<div class='feed-list'>{sub_items}</div></div>",
+                    unsafe_allow_html=True)
 
     with st.expander("Raw event log"):
         if events:
@@ -274,32 +300,66 @@ events = S.load_events()
 state = control.load_control()
 players = S.player_stats(events)
 
-# ---- Top bar: logo + editable match title --------------------------------- #
-logo_col, title_col = st.columns([1, 2.4], vertical_alignment="center")
-with logo_col:
-    st.markdown(
-        f"<img class='kp-reveal' src='{brand.logo_data_uri('dark', 260)}' "
-        f"style='width:100%; max-width:360px; display:block; animation-delay:.12s'/>",
-        unsafe_allow_html=True)
-with title_col:
-    match_name = (state.get("match_name") or "").strip()
-    with st.popover(match_name or "✎  Name this match"):
-        st.caption("Name this match / session")
-        new_name = st.text_input(
-            "Match name", value=match_name,
-            placeholder="e.g. Eagles vs Hawks — Jun 7",
-            label_visibility="collapsed", key="match_name_input")
-        s1, s2 = st.columns(2)
-        if s1.button("Save name", type="primary", width="stretch"):
-            state["match_name"] = new_name.strip()
-            control.save_control(state)
-            st.rerun()
-        if match_name and s2.button("Clear", width="stretch"):
-            state["match_name"] = ""
-            control.save_control(state)
-            st.rerun()
-    st.caption(f"Live match tracker · click the title to rename · "
-               f"{len(events)} events logged")
+# ---- Sidebar: team info --------------------------------------------------- #
+with st.sidebar:
+    st.markdown(brand.section("Team info"), unsafe_allow_html=True)
+    _teams = state.get("teams", {"home": {"name": "", "lineup": ""},
+                                  "away": {"name": "", "lineup": ""}})
+
+    with st.expander("Home team", expanded=True):
+        _home_name = st.text_input(
+            "Team name", value=_teams.get("home", {}).get("name", ""),
+            placeholder="e.g. Eagles", key="sidebar_home_name")
+        _home_lineup = st.text_area(
+            "Lineup", value=_teams.get("home", {}).get("lineup", ""),
+            placeholder="#1 Goalkeeper\n#5 Defender\n#10 Captain\n...",
+            height=160, key="sidebar_home_lineup")
+
+    with st.expander("Away team", expanded=True):
+        _away_name = st.text_input(
+            "Team name", value=_teams.get("away", {}).get("name", ""),
+            placeholder="e.g. Hawks", key="sidebar_away_name")
+        _away_lineup = st.text_area(
+            "Lineup", value=_teams.get("away", {}).get("lineup", ""),
+            placeholder="#1 Goalkeeper\n#5 Defender\n#10 Captain\n...",
+            height=160, key="sidebar_away_lineup")
+
+    if st.button("Save team info", type="primary", use_container_width=True,
+                 key="save_team_info"):
+        state["teams"] = {
+            "home": {"name": _home_name.strip(), "lineup": _home_lineup.strip()},
+            "away": {"name": _away_name.strip(), "lineup": _away_lineup.strip()},
+        }
+        control.save_control(state)
+        st.rerun()
+
+# ---- Top bar: centered logo + editable match title ------------------------ #
+st.markdown(
+    f"<div style='text-align:center; margin:2px 0 6px'>"
+    f"<img class='kp-reveal' src='{brand.logo_data_uri('dark', 300)}' "
+    f"style='width:300px; max-width:78%; animation-delay:.12s'/></div>",
+    unsafe_allow_html=True)
+
+match_name = (state.get("match_name") or "").strip()
+with st.popover(match_name or "✎  Name this match"):
+    st.caption("Name this match / session")
+    new_name = st.text_input(
+        "Match name", value=match_name,
+        placeholder="e.g. Eagles vs Hawks — Jun 7",
+        label_visibility="collapsed", key="match_name_input")
+    s1, s2 = st.columns(2)
+    if s1.button("Save name", type="primary", width="stretch"):
+        state["match_name"] = new_name.strip()
+        control.save_control(state)
+        st.rerun()
+    if match_name and s2.button("Clear", width="stretch"):
+        state["match_name"] = ""
+        control.save_control(state)
+        st.rerun()
+st.markdown(
+    f"<div style='text-align:center; color:#9fb6dd; font-size:.85rem; margin-top:2px'>"
+    f"Live match tracker · click the title to rename · {len(events)} events logged"
+    f"</div>", unsafe_allow_html=True)
 
 st.write("")
 
@@ -360,7 +420,7 @@ st.divider()
 left, right = st.columns([3, 2], gap="large")
 
 with left:
-    st.markdown(brand.section("Post-match summary"), unsafe_allow_html=True)
+    st.markdown(brand.section("Post-match summary", "AFTER MATCH"), unsafe_allow_html=True)
     notes = st.text_area(
         "Summary / notes", value=state.get("summary", ""),
         height=150, label_visibility="collapsed",
@@ -381,12 +441,12 @@ with left:
             st.error(f"Could not reach Ollama: {exc}")
 
 with right:
-    st.markdown(brand.section("Player spotlight"), unsafe_allow_html=True)
+    st.markdown(brand.section("Player spotlight", "SPOTLIGHT"), unsafe_allow_html=True)
     names = sorted(players.keys())
     st.selectbox("Spotlight a player", ["—"] + names,
                  key="spotlight", label_visibility="collapsed")
 
-    st.markdown(brand.section("Export report"), unsafe_allow_html=True)
+    st.markdown(brand.section("Export report", "EXPORT"), unsafe_allow_html=True)
     if st.button("⬇  Save & export report", type="primary", width="stretch"):
         try:
             main_clk, added, half = control.clock_label(state["timer"])

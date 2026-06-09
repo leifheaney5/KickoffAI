@@ -26,32 +26,12 @@ import timeline_image as TL  # noqa: E402
 st.set_page_config(page_title=f"{brand.NAME} — Timeline",
                    page_icon=brand.LOGO_TRANSPARENT, layout="wide")
 st.markdown(brand.global_css(), unsafe_allow_html=True)
-
-HOME, AWAY = IC.HOME_COLOR, IC.AWAY_COLOR
-
 st.markdown(
-    """
-    <style>
-      .block-container { max-width: 1100px; }
-      /* tighten the gap between timeline rows so the rail looks continuous */
-      div[data-testid="stHorizontalBlock"] { gap: 0 !important; }
-      /* Glass expanders on the dark theme */
-      [data-testid="stExpander"] { background: var(--glass) !important;
-            border: 1px solid var(--glass-bd) !important; border-radius: 12px !important;
-            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
-      [data-testid="stExpander"] summary { color: var(--txt) !important; }
-      [data-testid="stExpander"] summary:hover { color: var(--accent) !important; }
-      .det { display:flex; justify-content:space-between; padding:5px 0;
-             border-bottom:1px solid rgba(255,255,255,.08); font-size:.95rem; }
-      .det:last-child { border-bottom:none; }
-      .det .k { color:var(--muted); }
-      .legend { display:flex; flex-wrap:wrap; gap:14px; margin:4px 0 8px; }
-      .legend .item { display:flex; align-items:center; gap:6px; font-size:.85rem;
-                      color:var(--muted); }
-    </style>
-    """,
+    "<style>div[data-testid='stHorizontalBlock']{gap:0!important}</style>",
     unsafe_allow_html=True,
 )
+
+HOME, AWAY = IC.HOME_COLOR, IC.AWAY_COLOR
 
 
 def event_time(e):
@@ -74,13 +54,11 @@ main_clk, added, half = control.clock_label(state["timer"])
 clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
 score = (home["Goals"], away["Goals"])
 
-st.markdown(brand.header_html(), unsafe_allow_html=True)
-
 match_name = (state.get("match_name") or "").strip()
-st.markdown(f"# {match_name}" if match_name else "# Match Timeline")
-st.caption(f"{'Match Timeline · ' if match_name else ''}"
-           f"Home {score[0]} - {score[1]} Away   ·   {clock}   ·   "
-           f"{len(events)} events")
+st.markdown(
+    brand.page_header("MATCH", match_name or "Timeline"),
+    unsafe_allow_html=True)
+st.caption(f"Home {score[0]} – {score[1]} Away  ·  {clock}  ·  {len(events)} events")
 
 if not events:
     st.info("No events yet. Narrate the match on the dashboard, then come back "
