@@ -11,10 +11,11 @@ status.json
 reports/
 *.tmp
 
-# Vision pipeline artifacts (regenerated / downloaded on demand)
-# YOLO model weights, sample/match videos, pipeline + bridge output,
-# ultralytics training runs, and downloaded training datasets.
+# Vision pipeline artifacts. Large regenerables stay ignored; the trained model,
+# the annotation zip, and the public dataset are kept IN-REPO so both the desktop
+# and the laptop have everything after a pull.
 *.pt
+!soccer_yolov8m_v1.pt
 *.mp4
 match_stats*.json
 match_data.vision*.json
@@ -24,6 +25,7 @@ soccer_frames*/
 annotation_frames/
 match_segments/
 *.zip
+!annotation_frames.zip
 
 # macOS
 .DS_Store
