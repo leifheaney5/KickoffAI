@@ -447,6 +447,30 @@ with right:
                  key="spotlight", label_visibility="collapsed")
 
     st.markdown(brand.section("Export report", "EXPORT"), unsafe_allow_html=True)
+    if st.button("Share card", width="stretch"):
+        try:
+            import share_image
+            main_clk, added, half = control.clock_label(state["timer"])
+            clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
+            home_s = S.team_stats(events, "Home")
+            away_s = S.team_stats(events, "Away")
+            score = (home_s["Goals"], away_s["Goals"])
+            card_bytes = share_image.render_to_bytes(
+                events, score=score, clock=clk,
+                match_name=state.get("match_name", ""))
+            st.session_state["share_card_bytes"] = card_bytes
+        except Exception as exc:
+            st.error(f"Share card failed: {exc}")
+
+    if st.session_state.get("share_card_bytes"):
+        st.download_button(
+            "Download share card (PNG)",
+            data=st.session_state["share_card_bytes"],
+            file_name="match_summary.png",
+            mime="image/png",
+            width="stretch",
+        )
+
     if st.button("⬇  Save & export report", type="primary", width="stretch"):
         try:
             main_clk, added, half = control.clock_label(state["timer"])
