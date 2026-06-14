@@ -228,3 +228,78 @@ def territory(stats: dict, home_attacks_positive_x: bool = True) -> Dict[str, di
         for k in thirds:
             thirds[k] = thirds[k] / total
     return res
+
+
+# --------------------------------------------------------------------------- #
+# Natural-language digest (context for the AI analyst)
+# --------------------------------------------------------------------------- #
+def _zone_label(cx_idx: int, cy_idx: int, advancing: bool) -> str:
+    thirds = (["defensive", "middle", "attacking"] if advancing
+              else ["attacking", "middle", "defensive"])
+    lateral = ["left", "central", "right"]
+    return f"{thirds[cx_idx]} third / {lateral[cy_idx]}"
+
+
+def hotspot_zone(points: Sequence[Point], advancing: bool) -> Optional[str]:
+    """Coarsest (3x3) busiest zone label for a set of positions."""
+    H, _xe, _ye = heatmap(points, bins=(3, 3), normalize=False)
+    if H.sum() == 0:
+        return None
+    ix, iy = np.unravel_index(int(np.argmax(H)), H.shape)
+    return _zone_label(int(ix), int(iy), advancing)
+
+
+def spatial_summary(stats: dict, home_attacks_positive_x: bool = True) -> str:
+    """A compact, model-friendly digest of the spatial findings.
+
+    This is the context handed to the local AI analyst so it can answer
+    positioning / shape / territory questions from real computed numbers.
+    """
+    lines: List[str] = []
+    space = stats.get("tracking_data", {}).get("coordinate_space", "image")
+    n_frames = len(frames(stats))
+    teams = teams_present(stats)
+    n_players = len(collect_player_points(stats))
+
+    lines.append(
+        f"Vision spatial findings: {n_frames} sampled frames, "
+        f"{n_players} tracked player-ids, teams {', '.join(teams) or 'unlabelled'}."
+    )
+    if space != "pitch":
+        lines.append(
+            "NOTE: coordinates are UNCALIBRATED image space — team separation "
+            "and left/right are meaningful, but pitch depth (defensive vs "
+            "attacking) and absolute distances are approximate."
+        )
+
+    terr = territory(stats, home_attacks_positive_x)
+    for team in teams:
+        summ = team_shape_summary(stats, team)
+        if not summ:
+            continue
+        advancing = (home_attacks_positive_x if team == "Home"
+                     else not home_attacks_positive_x)
+        zone = hotspot_zone(team_points(stats, team), advancing)
+        t = terr.get(team, {})
+        lines.append(
+            f"{team}: ~{summ['avg_players']:.0f} players/frame; "
+            f"compactness {summ['compactness']:.1f} (lower = tighter block); "
+            f"depth {summ['spread_length']:.1f}, width {summ['spread_width']:.1f}; "
+            f"centroid ({summ['centroid_x']:.0f},{summ['centroid_y']:.0f}); "
+            f"territory def {t.get('defensive', 0)*100:.0f}% / "
+            f"mid {t.get('middle', 0)*100:.0f}% / "
+            f"att {t.get('attacking', 0)*100:.0f}%; "
+            f"busiest area: {zone or 'n/a'}."
+        )
+
+    if len(teams) == 2:
+        sa = team_shape_summary(stats, teams[0])
+        sb = team_shape_summary(stats, teams[1])
+        if sa and sb:
+            tighter = teams[0] if sa["compactness"] <= sb["compactness"] else teams[1]
+            higher = teams[0] if sa["centroid_x"] >= sb["centroid_x"] else teams[1]
+            lines.append(
+                f"Comparison: {tighter} held the more compact shape; "
+                f"{higher} had the higher average line."
+            )
+    return "\n".join(lines)

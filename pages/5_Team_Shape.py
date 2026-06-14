@@ -12,6 +12,7 @@ calibration lands, then become true tactical coordinates automatically.
 import os
 import sys
 
+import requests
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -221,3 +222,90 @@ if player_ids:
     st.caption("Per-player views depend on stable tracking IDs — reliable in "
                "clips now, and across a full match once jersey-number OCR is on "
                "(Phase 4).")
+
+# --------------------------------------------------------------------------- #
+# AI analyst over the spatial findings
+# --------------------------------------------------------------------------- #
+st.divider()
+st.markdown("#### Ask the analyst about positioning")
+st.caption("Answered locally by the Ollama model from the computed spatial "
+           "findings above — nothing leaves this machine.")
+
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+SPATIAL_SYSTEM = (
+    "You are Kickoff Pulse, an elite, level-headed soccer analyst. You are given "
+    "computed SPATIAL findings from computer-vision tracking of one match (team "
+    "heatmaps, average positions, shape metrics, territory). Answer using ONLY "
+    "that data. Be concise and specific — cite the numbers (compactness, "
+    "depth/width, territory %, busiest zones). If the data is uncalibrated image "
+    "space, don't overclaim precise distances. If it's too thin, say so. "
+    "2-5 sentences unless asked for more."
+)
+
+# Context the analyst reads: the spatial digest + a one-line score if available.
+spatial_ctx = analytics.spatial_summary(stats, home_attacks_positive_x=home_lr)
+try:
+    import stats as S  # the dashboard's event log, for match-aware answers
+    _ev = S.load_events()
+    if _ev:
+        _h, _a = S.team_stats(_ev, "Home"), S.team_stats(_ev, "Away")
+        spatial_ctx += (f"\nFrom the event log: score Home {_h['Goals']}-"
+                        f"{_a['Goals']} Away, shots H{_h['Shots']}/A{_a['Shots']}.")
+except Exception:
+    pass
+
+with st.expander("What the analyst sees"):
+    st.code(spatial_ctx)
+
+SHAPE_PROMPTS = {
+    "Describe the shape": "Describe each team's shape — compact or stretched, high or deep.",
+    "Where was the play?": "Which areas did each team occupy most, and what does that imply?",
+    "Who controlled territory?": "Which team controlled field position and territory, and how?",
+    "Tactical read": "Give a short tactical read from the positioning and heatmaps.",
+}
+
+if "kp_shape_chat" not in st.session_state:
+    st.session_state.kp_shape_chat = []
+
+
+def _ask_spatial(question: str, context: str) -> str:
+    payload = {
+        "model": OLLAMA_MODEL, "stream": False, "options": {"temperature": 0.3},
+        "messages": [
+            {"role": "system", "content": SPATIAL_SYSTEM},
+            {"role": "user",
+             "content": f"SPATIAL DATA:\n{context}\n\nQUESTION: {question}"},
+        ],
+    }
+    r = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=120)
+    r.raise_for_status()
+    return r.json()["message"]["content"].strip()
+
+
+pending = None
+pcols = st.columns(len(SHAPE_PROMPTS))
+for (label, q), col in zip(SHAPE_PROMPTS.items(), pcols):
+    if col.button(label, width="stretch", key=f"shape_{label}"):
+        pending = q
+typed = st.chat_input("Ask about shape, heatmaps, positioning…")
+if typed:
+    pending = typed
+
+if pending:
+    st.session_state.kp_shape_chat.append(("user", pending))
+    try:
+        with st.spinner("Analyzing positioning…"):
+            answer = _ask_spatial(pending, spatial_ctx)
+    except Exception as exc:
+        answer = (f"Couldn't reach the local model ({exc}). Start Ollama "
+                  "(`ollama serve`) and pull the model (`ollama pull llama3.2`).")
+    st.session_state.kp_shape_chat.append(("ai", answer))
+
+for role, text in st.session_state.kp_shape_chat:
+    with st.chat_message("user" if role == "user" else "assistant"):
+        st.markdown(text)
+
+if st.session_state.kp_shape_chat and st.button("Clear", key="shape_clear"):
+    st.session_state.kp_shape_chat = []
+    st.rerun()
