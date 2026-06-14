@@ -24,3 +24,9 @@ watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 # Report export (email-friendly PDF) + timeline image rendering
 fpdf2>=2.7.0
 pillow>=10.0.0
+
+# ---- Optional: local computer-vision pipeline ("the Eye") ----
+# Heavy YOLO/OpenCV/OCR stack for video analysis lives separately so the audio
+# app stays lightweight. Install when you want video analytics:
+#   pip install -r vision/requirements.txt
+# See vision/README.md for usage (python -m vision --video match.mp4).

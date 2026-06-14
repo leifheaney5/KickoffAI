@@ -11,5 +11,17 @@ status.json
 reports/
 *.tmp
 
+# Vision pipeline artifacts (regenerated / downloaded on demand)
+# YOLO model weights, sample/match videos, pipeline + bridge output,
+# ultralytics training runs, and downloaded training datasets.
+*.pt
+*.mp4
+match_stats*.json
+match_data.vision*.json
+runs/
+datasets/
+soccer_frames*/
+annotation_frames/
+
 # macOS
 .DS_Store
