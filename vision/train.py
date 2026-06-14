@@ -77,6 +77,7 @@ def train(
     imgsz: int = 1280,
     device: str = "0",
     batch: int = -1,
+    workers: int = 8,
     project: str = "runs/soccer",
     name: str = "kickoff_pulse",
 ) -> str:
@@ -99,6 +100,7 @@ def train(
         imgsz=imgsz,
         device=device,
         batch=batch,
+        workers=workers,
         project=project,
         name=name,
     )
@@ -129,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--imgsz", type=int, default=1280)
     p.add_argument("--batch", type=int, default=-1, help="-1 = auto batch size.")
+    p.add_argument("--workers", type=int, default=8,
+                   help="Dataloader workers (lower if you hit CPU RAM limits).")
     p.add_argument("--device", default="0", help="'0' GPU, '0,1' multi, 'cpu'.")
     p.add_argument("--run-project", default="runs/soccer", help="Output dir.")
     p.add_argument("--name", default="kickoff_pulse", help="Run name.")
@@ -176,6 +180,7 @@ def main(argv: Optional[list] = None) -> int:
         imgsz=args.imgsz,
         device=args.device,
         batch=args.batch,
+        workers=args.workers,
         project=args.run_project,
         name=args.name,
     )
