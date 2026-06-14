@@ -21,8 +21,31 @@ CONTROL_FILE = os.environ.get("KICKOFF_CONTROL_FILE", "control.json")
 # the same writer.
 STATUS_FILE = os.environ.get("KICKOFF_STATUS_FILE", "status.json")
 
+# Free-form match notes ("record thoughts"). Appended by the tracker while
+# thoughts mode is on; read (and pruned) by the dashboard. Each note may keep
+# its source audio clip in NOTES_AUDIO_DIR for playback under Match Insights.
+NOTES_FILE = os.environ.get("KICKOFF_NOTES_FILE", "notes.json")
+NOTES_AUDIO_DIR = os.environ.get("KICKOFF_NOTES_AUDIO_DIR", "notes_audio")
+
 FIRST_HALF_SECONDS = 45 * 60
 FULL_TIME_SECONDS = 90 * 60
+
+# Background block-out: a 0-100 slider maps linearly onto this energy-threshold
+# range (speech_recognition RMS units). 0 = very sensitive, 100 = only loud,
+# close speech passes.
+NOISE_GATE_MIN = 100.0
+NOISE_GATE_MAX = 5000.0
+DEFAULT_NOISE_GATE = 30
+
+
+def gate_to_threshold(gate) -> float:
+    """Map a 0-100 block-out strength to a mic energy threshold."""
+    try:
+        g = float(gate)
+    except (TypeError, ValueError):
+        g = DEFAULT_NOISE_GATE
+    g = max(0.0, min(100.0, g))
+    return NOISE_GATE_MIN + (NOISE_GATE_MAX - NOISE_GATE_MIN) * (g / 100.0)
 
 
 def atomic_replace(tmp: str, dst: str, attempts: int = 40,
@@ -57,6 +80,12 @@ DEFAULT = {
         "home": {"name": "", "lineup": ""},
         "away": {"name": "", "lineup": ""},
     },
+    "thoughts_mode": False,
+    "noise_gate": 30,
+    "lineups": {
+        "Home": {"formation": "", "players": []},
+        "Away": {"formation": "", "players": []},
+    },
 }
 
 
@@ -76,6 +105,7 @@ def load_control() -> dict:
         "home": {**DEFAULT["teams"]["home"], **saved_teams.get("home", {})},
         "away": {**DEFAULT["teams"]["away"], **saved_teams.get("away", {})},
     }
+    merged["lineups"] = _normalise_lineups(merged.get("lineups"))
     return merged
 
 
@@ -91,6 +121,89 @@ def save_control(state: dict) -> None:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+# --------------------------------------------------------------------------- #
+# Lineups / roster
+# --------------------------------------------------------------------------- #
+def _normalise_lineups(lineups) -> dict:
+    """Coerce stored lineups into the canonical {team: {formation, players}}."""
+    out = {}
+    src = lineups if isinstance(lineups, dict) else {}
+    for team in ("Home", "Away"):
+        t = src.get(team)
+        if isinstance(t, dict):
+            players = [p for p in (t.get("players") or []) if isinstance(p, dict)]
+            out[team] = {"formation": str(t.get("formation") or ""),
+                         "players": players}
+        else:
+            out[team] = {"formation": "", "players": []}
+    return out
+
+
+def roster_for(lineups, team) -> list:
+    """The list of {number, name} dicts for a team (possibly empty)."""
+    t = (lineups or {}).get(team)
+    if isinstance(t, dict):
+        return [p for p in (t.get("players") or []) if isinstance(p, dict)]
+    return []
+
+
+def lineup_formation(lineups, team) -> str:
+    t = (lineups or {}).get(team)
+    return str(t.get("formation") or "") if isinstance(t, dict) else ""
+
+
+def has_lineups(lineups) -> bool:
+    return any(roster_for(lineups, t) for t in ("Home", "Away"))
+
+
+def resolve_player(lineups, player, team=None):
+    """Resolve a parsed player reference against the roster.
+
+    `player` is the tracker's canonical form ("#6" for a shirt number, else a
+    name). Returns (name, team): a shirt number is mapped to that player's name
+    and, when the side wasn't stated, the team is inferred — but only when the
+    match is unambiguous across both rosters. Falls back to the inputs.
+    """
+    if not player or not has_lineups(lineups):
+        return player, team
+    num = player[1:] if player.startswith("#") and player[1:].isdigit() else None
+    matches = []  # (team, name)
+    for t in ("Home", "Away"):
+        if team and t != team:
+            continue
+        for p in roster_for(lineups, t):
+            pname = str(p.get("name") or "").strip()
+            pnum = str(p.get("number") or "").strip()
+            if num is not None:
+                if pnum and pnum == num:
+                    matches.append((t, pname or player))
+            elif pname and pname.lower() == player.lower():
+                matches.append((t, pname))
+    if len(matches) == 1:
+        mteam, mname = matches[0]
+        return (mname or player), (team or mteam)
+    return player, team
+
+
+def roster_prompt(lineups) -> str:
+    """A compact roster summary to hand the model as parsing context."""
+    if not has_lineups(lineups):
+        return ""
+    blocks = []
+    for team in ("Home", "Away"):
+        roster = roster_for(lineups, team)
+        if not roster:
+            continue
+        entries = ", ".join(
+            f"#{str(p.get('number') or '').strip()} "
+            f"{str(p.get('name') or '').strip()}".strip()
+            for p in roster if (p.get("number") or p.get("name")))
+        form = lineup_formation(lineups, team)
+        head = team + (f" [{form}]" if form else "")
+        blocks.append(f"{head}: {entries}")
+    return "\n".join(blocks)
 
 
 # --------------------------------------------------------------------------- #
@@ -199,6 +312,60 @@ def record_seconds(status: dict) -> float:
     if status.get("recording") and status.get("rec_since"):
         secs += time.time() - status["rec_since"]
     return secs
+
+
+# --------------------------------------------------------------------------- #
+# Match notes ("record thoughts / synopsis")
+# --------------------------------------------------------------------------- #
+def _write_json_atomic(data, path: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        atomic_replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def load_notes(path: str = None) -> list:
+    path = path or NOTES_FILE
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (ValueError, OSError):
+        return []
+
+
+def append_note(note: dict, path: str = None) -> None:
+    """Append a note (re-reading first so concurrent writes don't clobber)."""
+    path = path or NOTES_FILE
+    notes = load_notes(path)
+    notes.append(note)
+    _write_json_atomic(notes, path)
+
+
+def delete_note(timestamp: str, path: str = None) -> bool:
+    path = path or NOTES_FILE
+    notes = load_notes(path)
+    remaining = [n for n in notes if n.get("timestamp") != timestamp]
+    if len(remaining) == len(notes):
+        return False
+    # Clean up the deleted note's audio clip, if any.
+    for n in notes:
+        if n.get("timestamp") == timestamp and n.get("audio"):
+            try:
+                if os.path.exists(n["audio"]):
+                    os.remove(n["audio"])
+            except OSError:
+                pass
+    _write_json_atomic(remaining, path)
+    return True
 
 
 def tracker_online(status: dict, max_age: float = 8.0) -> bool:

@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import wave
+from collections import Counter
 from datetime import datetime, timezone
 
 import requests
@@ -42,12 +43,135 @@ WHISPER_MLX_MODEL = os.environ.get(
     "WHISPER_MLX_MODEL", "mlx-community/whisper-base.en-mlx"
 )
 
+# Microphone selection. Unset = the system default input. Set to a device index
+# or a name substring (e.g. "AirPods") to pin a specific mic.
+MIC_SELECT = os.environ.get("KICKOFF_MIC")
+
+# --- Noise gating ----------------------------------------------------------- #
+# Two layers keep background noise out of the log:
+#   1. The microphone only "hears" sound clearly above the room ambience.
+#   2. Whisper output is rejected unless it looks like real, confident speech.
+# Every knob is overridable via the environment so a noisy venue can be tuned.
+#
+# Mic energy: dynamic auto-lowering is OFF by default (in a quiet room it keeps
+# dropping until it triggers on hum). The "background block-out" slider in the
+# dashboard drives the threshold live each loop (see control.gate_to_threshold).
+# KICKOFF_ENERGY_THRESHOLD pins a fixed value and ignores the slider.
+_ENV_ENERGY = os.environ.get("KICKOFF_ENERGY_THRESHOLD")  # fixed value if set
+ENERGY_THRESHOLD = float(_ENV_ENERGY) if _ENV_ENERGY else None
+DYNAMIC_ENERGY = os.environ.get("KICKOFF_DYNAMIC_ENERGY", "0") == "1"
+PAUSE_THRESHOLD = float(os.environ.get("KICKOFF_PAUSE_THRESHOLD", "0.8"))
+
+# Speech acceptance: ignore too-short blips and low-confidence / repetitive
+# transcripts (Whisper's classic hallucinations on near-silence).
+MIN_PHRASE_SEC = float(os.environ.get("KICKOFF_MIN_PHRASE_SEC", "0.4"))
+MIN_WORDS = int(os.environ.get("KICKOFF_MIN_WORDS", "2"))
+NO_SPEECH_MAX = float(os.environ.get("KICKOFF_NO_SPEECH_MAX", "0.6"))
+LOGPROB_MIN = float(os.environ.get("KICKOFF_LOGPROB_MIN", "-1.0"))
+REPEAT_RATIO = float(os.environ.get("KICKOFF_REPEAT_RATIO", "0.6"))
+UNIQUE_MIN = float(os.environ.get("KICKOFF_UNIQUE_MIN", "0.35"))
+
+# Whole-transcript fillers Whisper invents from noise/silence.
+HALLUCINATION_PHRASES = {
+    "you", "thank you", "thanks for watching", "thanks for watching!",
+    "bye", "okay", "ok", "so", "yeah", "uh", "um", "hmm", "mm",
+    "please subscribe", "subtitles by the amara.org community",
+}
+
+# Single-word calls a commentator genuinely shouts — exempt from the
+# two-word minimum so a lone "Goal!" / "Corner!" still counts.
+SOCCER_KEYWORDS = {
+    "goal", "corner", "offside", "penalty", "foul", "save", "saved",
+    "card", "tackle", "handball", "shot", "block", "header", "cross",
+}
+
+
+# Bias Whisper toward soccer vocabulary so the right words win on close calls
+# (e.g. "away team" instead of "la team"). Passed as the decoder's initial_prompt.
+INITIAL_PROMPT = os.environ.get(
+    "KICKOFF_INITIAL_PROMPT",
+    "Live soccer match commentary. The two sides are called Home and Away. "
+    "Common phrases: home team, away team, pass, shot, save, tackle, foul, goal, "
+    "corner, offside, header, cross, dribble, clearance, interception, "
+    "yellow card, red card, penalty, substitution, throw in, goal kick.")
+
+# Post-transcription fixes for words Whisper reliably mangles. Applied with
+# word boundaries, case-insensitively, before parsing — chiefly the Home/Away
+# side names, which the model loves to turn into "la", "the way", "om", etc.
+_CORRECTIONS = [
+    (r"\b(?:la|le|lay) team\b", "away team"),
+    (r"\b(?:a|the) way team\b", "away team"),
+    (r"\baway team\b", "away team"),
+    (r"\bsave (?:la|le|a|the) way\b", "save away"),
+    (r"\b(?:om|ohm|hom|hum|hone) team\b", "home team"),
+    (r"\bthrow in\b", "throw-in"),
+]
+_CORRECTIONS = [(re.compile(p, re.I), r) for p, r in _CORRECTIONS]
+
+
+def apply_corrections(text: str) -> str:
+    """Repair common Whisper mishearings (mainly the Home/Away side names)."""
+    out = text or ""
+    for pattern, repl in _CORRECTIONS:
+        out = pattern.sub(repl, out)
+    return out
+
+
 # Recognised vocabulary — used to normalise and validate the model's output.
 TEAMS = {"home", "away"}
 ACTIONS = {"pass", "shot", "tackle", "foul", "goal", "save", "cross", "dribble",
            "card", "corner", "offside", "interception", "clearance", "substitution"}
 RESULTS = {"complete", "incomplete", "missed", "blocked", "on target", "scored",
            "saved", "won", "lost", "successful", "unsuccessful", "yellow", "red"}
+
+
+# --------------------------------------------------------------------------- #
+# Speech acceptance gate
+# --------------------------------------------------------------------------- #
+def is_real_speech(text: str, segments: list):
+    """Decide whether a transcript is genuine speech worth logging.
+
+    Returns (ok, reason). Rejects empties, one-word blips, known filler
+    hallucinations, runaway repetition, and low-confidence output (high
+    no-speech probability or low average log-prob from Whisper's segments).
+    """
+    t = (text or "").strip()
+    if not t:
+        return False, "empty"
+
+    words = re.findall(r"[A-Za-z']+", t)
+    low = [w.lower() for w in words]
+    if len(words) < MIN_WORDS:
+        # Allow a single, unambiguous soccer shout ("Goal!"); drop other blips.
+        if not (len(words) == 1 and low[0] in SOCCER_KEYWORDS):
+            return False, "too short"
+
+    norm = re.sub(r"[^a-z ]+", "", t.lower()).strip()
+    if norm in HALLUCINATION_PHRASES:
+        return False, "filler"
+
+    # Runaway repetition, both kinds Whisper produces on non-speech:
+    #   - one word dominating ("no no no ...")
+    #   - a short phrase looping ("I'm the one who knows" x N) -> few unique words
+    if len(words) >= 6:
+        word, n = Counter(low).most_common(1)[0]
+        if n / len(words) > REPEAT_RATIO:
+            return False, f"repetition ({word} x{n})"
+        if len(set(low)) / len(words) < UNIQUE_MIN:
+            return False, "looped phrase"
+
+    # Whisper confidence, when the backend reports per-segment scores.
+    if segments:
+        worst_no_speech = max(
+            (s.get("no_speech_prob", 0.0) for s in segments), default=0.0)
+        mean_logprob = sum(
+            s.get("avg_logprob", 0.0) for s in segments) / len(segments)
+        if worst_no_speech > NO_SPEECH_MAX:
+            return False, f"no-speech {worst_no_speech:.2f}"
+        if mean_logprob < LOGPROB_MIN:
+            return False, f"low-confidence {mean_logprob:.2f}"
+
+    return True, "ok"
 
 
 # --------------------------------------------------------------------------- #
@@ -88,19 +212,34 @@ class Transcriber:
                   "pip install openai-whisper", flush=True)
             sys.exit(1)
 
-    def transcribe(self, wav_path: str) -> str:
-        """Return the transcript for a WAV file (may be empty)."""
+    # Decoding options shared by both backends. Pinning the language and
+    # temperature, and turning OFF condition_on_previous_text, stops Whisper
+    # from drifting into the repetition loops it produces on non-speech.
+    _OPTS = dict(
+        language="en",
+        temperature=0.0,
+        condition_on_previous_text=False,
+        initial_prompt=INITIAL_PROMPT,
+        no_speech_threshold=NO_SPEECH_MAX,
+        logprob_threshold=LOGPROB_MIN,
+        compression_ratio_threshold=2.4,
+    )
+
+    def transcribe(self, wav_path: str):
+        """Return (text, segments) for a WAV file. Text may be empty."""
         try:
             if self.backend == "mlx-whisper":
                 result = self._mlx.transcribe(
-                    wav_path, path_or_hf_repo=WHISPER_MLX_MODEL
+                    wav_path, path_or_hf_repo=WHISPER_MLX_MODEL, **self._OPTS
                 )
             else:
-                result = self._openai_model.transcribe(wav_path, fp16=False)
-            return (result.get("text") or "").strip()
+                result = self._openai_model.transcribe(
+                    wav_path, fp16=False, **self._OPTS
+                )
+            return (result.get("text") or "").strip(), result.get("segments") or []
         except Exception as exc:
             print(f"[ear] transcription error: {exc}", flush=True)
-            return ""
+            return "", []
 
 
 # --------------------------------------------------------------------------- #
@@ -157,15 +296,28 @@ phrase: "Away completes a pass in midfield"
 {"team":"Away","player":null,"action":"pass","result":"complete","location":"midfield"}"""
 
 
-def parse_event(text: str) -> dict:
-    """Send transcript to Ollama and return a normalised event dict, or {}."""
+def parse_event(text: str, lineups=None) -> dict:
+    """Send transcript to Ollama and return a normalised event dict, or {}.
+
+    When a lineup is available it is handed to the model as context (so spoken
+    shirt numbers come back as names and the side is filled in), and the parsed
+    player is resolved against the roster as a deterministic backstop.
+    """
+    system = SYSTEM_PROMPT
+    roster = control.roster_prompt(lineups)
+    if roster:
+        system += (
+            "\n\nKNOWN ROSTERS for this match. Map any shirt number you hear to "
+            "that player's NAME, prefer outputting the name in \"player\", and use "
+            "the roster to decide whether the event is Home or Away:\n" + roster)
+
     payload = {
         "model": OLLAMA_MODEL,
         "format": "json",
         "stream": False,
         "options": {"temperature": 0},
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": text},
         ],
     }
@@ -183,7 +335,12 @@ def parse_event(text: str) -> dict:
         print(f"[brain] could not parse model output: {exc}", flush=True)
         return {}
 
-    return normalise(event)
+    event = normalise(event)
+    # Deterministic backstop: map shirt numbers to names and infer the side.
+    name, team = control.resolve_player(
+        lineups, event.get("player"), event.get("team"))
+    event["player"], event["team"] = name, team
+    return event
 
 
 def normalise(event: dict) -> dict:
@@ -270,6 +427,29 @@ def append_event(record: dict) -> None:
 # --------------------------------------------------------------------------- #
 # The Ear — microphone capture loop
 # --------------------------------------------------------------------------- #
+def pick_microphone(sr):
+    """Open the configured microphone (KICKOFF_MIC) or the system default.
+
+    KICKOFF_MIC may be a device index or a case-insensitive name substring
+    (e.g. "AirPods"). Falls back to the default device when unset or unmatched.
+    """
+    if not MIC_SELECT:
+        return sr.Microphone()
+    names = sr.Microphone.list_microphone_names()
+    idx = None
+    if MIC_SELECT.isdigit() and int(MIC_SELECT) < len(names):
+        idx = int(MIC_SELECT)
+    else:
+        idx = next((i for i, n in enumerate(names)
+                    if MIC_SELECT.lower() in n.lower()), None)
+    if idx is None:
+        print(f"[ear] mic '{MIC_SELECT}' not found; using the system default. "
+              f"Available inputs: {names}", flush=True)
+        return sr.Microphone()
+    print(f"[ear] using microphone #{idx}: {names[idx]}", flush=True)
+    return sr.Microphone(device_index=idx)
+
+
 def write_wav(audio, path: str) -> None:
     """Write SpeechRecognition AudioData to a 16-bit mono WAV file."""
     with wave.open(path, "wb") as wf:
@@ -307,11 +487,11 @@ def main():
 
     transcriber = Transcriber()
     recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8  # seconds of silence that ends a phrase
+    recognizer.dynamic_energy_threshold = DYNAMIC_ENERGY
+    recognizer.pause_threshold = PAUSE_THRESHOLD  # silence that ends a phrase
 
     try:
-        mic = sr.Microphone()
+        mic = pick_microphone(sr)
     except OSError as exc:
         print(f"[ear] FATAL: cannot open microphone ({exc}).", flush=True)
         print("[ear] Grant microphone permission to your terminal in "
@@ -327,6 +507,19 @@ def main():
         print("[ear] Enable mic permission for your terminal app and retry.",
               flush=True)
         sys.exit(1)
+
+    # Set the initial gate. A fixed env value wins; otherwise the dashboard's
+    # block-out slider governs it (and keeps governing it live in the loop).
+    if ENERGY_THRESHOLD is not None:
+        recognizer.energy_threshold = ENERGY_THRESHOLD
+        print(f"[ear] mic energy threshold fixed at {ENERGY_THRESHOLD:.0f} "
+              f"(KICKOFF_ENERGY_THRESHOLD set).", flush=True)
+    else:
+        gate = control.load_control().get("noise_gate", control.DEFAULT_NOISE_GATE)
+        recognizer.energy_threshold = control.gate_to_threshold(gate)
+        print(f"[ear] background block-out {gate}/100 -> energy threshold "
+              f"{recognizer.energy_threshold:.0f} (adjust live from the dashboard).",
+              flush=True)
 
     print("=" * 60, flush=True)
     print(f"  Kickoff Pulse listening  |  transcribe: {transcriber.backend}", flush=True)
@@ -349,9 +542,23 @@ def main():
     control.save_status(status)
 
     paused_notice = False
+    last_gate = None
     while running["flag"]:
+        ctrl = control.load_control()
+
+        # Apply the live "background block-out" slider (unless a fixed env
+        # threshold is pinned). Updating energy_threshold takes effect on the
+        # next listen(), so dragging the slider changes sensitivity instantly.
+        if ENERGY_THRESHOLD is None:
+            gate = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
+            if gate != last_gate:
+                recognizer.energy_threshold = control.gate_to_threshold(gate)
+                print(f"[ear] block-out set to {gate}/100 -> energy threshold "
+                      f"{recognizer.energy_threshold:.0f}", flush=True)
+                last_gate = gate
+
         # Honour a pause requested from the dashboard: stop logging events.
-        if control.load_control().get("paused"):
+        if ctrl.get("paused"):
             if not paused_notice:
                 print("[ear] recording paused (resume from the dashboard)",
                       flush=True)
@@ -385,29 +592,70 @@ def main():
             time.sleep(0.5)
             continue
 
+        # Drop sub-threshold blips (a cough, a door) before paying for Whisper.
+        duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
+        if duration < MIN_PHRASE_SEC:
+            continue
+
         # Transcribe via a temp WAV file.
         tmp_wav = None
         try:
             fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
             write_wav(audio, tmp_wav)
-            text = transcriber.transcribe(tmp_wav)
+            text, segments = transcriber.transcribe(tmp_wav)
         finally:
             if tmp_wav and os.path.exists(tmp_wav):
                 os.remove(tmp_wav)
 
-        if not text:
-            continue  # empty transcription — skip without crashing
+        # Repair common mishearings (Home/Away side names) before anything else.
+        text = apply_corrections(text)
+
+        # Only log confident, speech-like transcripts — this is what keeps
+        # background noise and Whisper hallucinations out of the match log.
+        ok, reason = is_real_speech(text, segments)
+        if not ok:
+            if text:
+                print(f"[ear] ignored ({reason}): {text[:60]!r}", flush=True)
+            continue
+
+        # Stamp the current match-clock reading so the feed/report can show it.
+        ctrl = control.load_control()
+        main_clk, added, _half = control.clock_label(ctrl["timer"])
+        match_time = f"{main_clk}{(' ' + added) if added else ''}"
+
+        # Thoughts mode: capture the phrase as a free-form note, not an event,
+        # and keep its audio clip so it can be played back under Match Insights.
+        if ctrl.get("thoughts_mode"):
+            now_utc = datetime.now(timezone.utc)
+            audio_rel = None
+            try:
+                os.makedirs(control.NOTES_AUDIO_DIR, exist_ok=True)
+                audio_rel = os.path.join(
+                    control.NOTES_AUDIO_DIR,
+                    f"note_{now_utc.strftime('%Y%m%d_%H%M%S_%f')}.wav")
+                write_wav(audio, audio_rel)
+            except Exception as exc:
+                print(f"[note] could not save audio: {exc}", flush=True)
+                audio_rel = None
+            note = {
+                "timestamp": now_utc.isoformat(),
+                "match_time": match_time,
+                "text": text,
+                "audio": audio_rel,
+            }
+            control.append_note(note)
+            status["last_heard"] = text[:140]
+            status["notes"] = len(control.load_notes())
+            control.save_status(status)
+            print(f"[note] saved: {text!r}", flush=True)
+            continue
 
         print(f"[ear] heard: {text!r}", flush=True)
         status["last_heard"] = text[:140]
         control.save_status(status)
 
-        event = parse_event(text)
-        # Stamp the current match-clock reading so the feed/report can show it.
-        ctrl = control.load_control()
-        main_clk, added, _half = control.clock_label(ctrl["timer"])
-        match_time = f"{main_clk}{(' ' + added) if added else ''}"
+        event = parse_event(text, lineups=ctrl.get("lineups"))
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "match_time": match_time,

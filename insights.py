@@ -117,7 +117,8 @@ def build_context(events: list, home: dict, away: dict, clock="") -> str:
         f"Fouls H{home['Fouls']}/A{away['Fouls']}.",
         f"Cards: Home {home['Yellow Cards']}Y/{home['Red Cards']}R, "
         f"Away {away['Yellow Cards']}Y/{away['Red Cards']}R.",
-        f"Corners H{home['Corners']}/A{away['Corners']}.",
+        f"Corners H{home['Corners']}/A{away['Corners']}, "
+        f"Passes H{home['Passes']}/A{away['Passes']}.",
     ]
     leader, strength = momentum_leader(events)
     if leader:

@@ -131,11 +131,13 @@ _ROOT = (
     "}"
 )
 
+# Background: stadium-light glows over a deep navy→blue gradient — simple,
+# clean depth, no pitch lines.
 _BG = (
-    ".stApp{"
-    "background:"
-    "radial-gradient(1200px 700px at 80% -10%,rgba(30,123,255,.10),transparent 60%),"
-    "linear-gradient(160deg,var(--c-bg1),var(--c-bg2)) fixed;"
+    ".stApp{background:"
+    "radial-gradient(900px 520px at 82% -8%, rgba(43,231,255,.16) 0%, transparent 60%),"
+    "radial-gradient(800px 500px at 12% 8%, rgba(30,123,255,.20) 0%, transparent 55%),"
+    "linear-gradient(165deg,#04102a 0%,#071f4d 48%,#0b2f74 100%) fixed;"
     "background-attachment:fixed;}"
 )
 

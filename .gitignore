@@ -8,6 +8,8 @@ match_data.json
 match_data.csv
 control.json
 status.json
+notes.json
+notes_audio/
 reports/
 *.tmp
 

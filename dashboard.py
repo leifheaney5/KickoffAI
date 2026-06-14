@@ -20,6 +20,7 @@ import brand
 import control
 import icons as IC
 import report
+import share_image
 import stats as S
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -70,6 +71,26 @@ def team_chip(team) -> str:
                 "border-color:rgba(220,38,38,.45);background:rgba(220,38,38,.12)'>AWAY</span>")
     return ("<span class='team-chip' style='color:var(--c-muted);"
             "border-color:var(--border);background:rgba(255,255,255,.05)'>—</span>")
+
+
+def roster_df(lineups, team) -> pd.DataFrame:
+    """A two-column (Number, Name) editor frame for a team's roster."""
+    rows = [{"Number": str(p.get("number") or ""), "Name": str(p.get("name") or "")}
+            for p in control.roster_for(lineups, team)]
+    if not rows:
+        rows = [{"Number": "", "Name": ""}]  # one empty row to type into
+    return pd.DataFrame(rows, columns=["Number", "Name"])
+
+
+def df_to_players(df) -> list:
+    """Convert an edited roster frame back to [{number, name}], dropping blanks."""
+    players = []
+    for _, r in df.iterrows():
+        num = str(r.get("Number") or "").strip()
+        name = str(r.get("Name") or "").strip()
+        if num or name:
+            players.append({"number": num, "name": name})
+    return players
 
 
 def cmp_row(label: str, h, a) -> str:
@@ -401,6 +422,58 @@ st.caption("Recording paused — new events are not logged." if paused
 
 st.write("")
 
+# ---- Background block-out (live mic sensitivity) -------------------------- #
+st.markdown(brand.section("Background block-out"), unsafe_allow_html=True)
+gate = st.slider(
+    "Block-out strength", min_value=0, max_value=100,
+    value=int(state.get("noise_gate", control.DEFAULT_NOISE_GATE)),
+    label_visibility="collapsed", key="noise_gate_slider",
+    help="Higher blocks more background noise — only louder, closer speech is "
+         "tracked. Lower is more sensitive. Takes effect immediately.")
+if gate != int(state.get("noise_gate", control.DEFAULT_NOISE_GATE)):
+    state["noise_gate"] = gate
+    control.save_control(state)
+st.caption(f"More sensitive  ·  strength {gate}/100  ·  blocks more  —  "
+           f"only sound above ~{control.gate_to_threshold(gate):.0f} energy is "
+           f"captured. Watch the “Heard” chip and adjust to taste.")
+
+st.write("")
+
+# ---- Record thoughts / synopsis ------------------------------------------- #
+st.markdown(brand.section("Record thoughts / synopsis"), unsafe_allow_html=True)
+thoughts_on = state.get("thoughts_mode", False)
+th1, th2 = st.columns([1, 2.4], vertical_alignment="center")
+if th1.button("● Stop recording" if thoughts_on else "Record thoughts",
+              type="primary" if thoughts_on else "secondary", width="stretch",
+              key="thoughts_toggle"):
+    state["thoughts_mode"] = not thoughts_on
+    control.save_control(state)
+    st.rerun()
+with th2:
+    if thoughts_on:
+        st.caption("Recording — speak your thoughts freely. Each phrase is saved "
+                   "as a note below (match events are paused). Click Stop when done.")
+    else:
+        st.caption("Click, then speak a free-form synopsis or observation. Your "
+                   "words are saved as timestamped notes instead of match events.")
+
+notes = control.load_notes()
+if notes:
+    for n in reversed(notes[-30:]):
+        nc1, nc2 = st.columns([12, 1], vertical_alignment="center")
+        nc1.markdown(
+            f"<div class='kp-feed'><div class='body'><div class='top'>"
+            f"<span class='t'>{n.get('match_time') or ''}</span></div>"
+            f"<div class='sum'>{n.get('text', '')}</div></div></div>",
+            unsafe_allow_html=True)
+        if nc2.button("✕", key=f"delnote_{n['timestamp']}", help="Delete note"):
+            control.delete_note(n["timestamp"])
+            st.rerun()
+else:
+    st.caption("No notes yet.")
+
+st.write("")
+
 # ---- Live stats + feed ---------------------------------------------------- #
 if hasattr(st, "fragment"):
     st.fragment(run_every=1.0)(render_stats_feed)()
@@ -413,6 +486,46 @@ else:
     render_stats_feed()
 
 st.divider()
+
+# --------------------------------------------------------------------------- #
+# Lineups & formation (optional) — used by the tracker (brain) + the report
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Lineups & formation"), unsafe_allow_html=True)
+lineups = state.get("lineups") or {}
+with st.expander("Edit lineups, numbers & formation — the tracker uses these to "
+                 "name players and pick the side"):
+    st.caption("Enter each side's formation and roster (shirt number + name). "
+               "The brain maps a spoken “number 6” to that player's name and "
+               "team; the report lists both lineups.")
+    fc1, fc2 = st.columns(2)
+    home_formation = fc1.text_input(
+        "Home formation", value=control.lineup_formation(lineups, "Home"),
+        placeholder="e.g. 4-3-3", key="home_formation")
+    away_formation = fc2.text_input(
+        "Away formation", value=control.lineup_formation(lineups, "Away"),
+        placeholder="e.g. 4-4-2", key="away_formation")
+    colcfg = {
+        "Number": st.column_config.TextColumn("No.", width="small"),
+        "Name": st.column_config.TextColumn("Name"),
+    }
+    ec1, ec2 = st.columns(2)
+    home_roster = ec1.data_editor(
+        roster_df(lineups, "Home"), num_rows="dynamic", width="stretch",
+        hide_index=True, column_config=colcfg, key="home_roster")
+    away_roster = ec2.data_editor(
+        roster_df(lineups, "Away"), num_rows="dynamic", width="stretch",
+        hide_index=True, column_config=colcfg, key="away_roster")
+    if st.button("Save lineups", type="primary", width="stretch"):
+        state["lineups"] = {
+            "Home": {"formation": home_formation.strip(),
+                     "players": df_to_players(home_roster)},
+            "Away": {"formation": away_formation.strip(),
+                     "players": df_to_players(away_roster)},
+        }
+        control.save_control(state)
+        st.success("Lineups saved — the tracker now uses them for new events.")
+
+st.write("")
 
 # --------------------------------------------------------------------------- #
 # Post-match summary + export
@@ -453,7 +566,8 @@ with right:
             clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
             paths = report.generate(events=events,
                                     summary=state.get("summary", ""), clock=clk,
-                                    match_name=state.get("match_name", ""))
+                                    match_name=state.get("match_name", ""),
+                                    lineups=state.get("lineups"))
             st.session_state["report_paths"] = paths
             st.success(f"Report generated · {paths['events']} events")
         except Exception as exc:
@@ -470,3 +584,23 @@ with right:
                                file_name=os.path.basename(paths["pdf"]),
                                mime="application/pdf", width="stretch")
         st.caption(f"Saved to {os.path.dirname(paths['pdf'])}/")
+
+    # Mobile share card — a portrait summary image sized for texting.
+    st.markdown(brand.section("Share image (mobile)"), unsafe_allow_html=True)
+    if st.button("Generate share image", width="stretch"):
+        try:
+            main_clk, added, half = control.clock_label(state["timer"])
+            clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
+            st.session_state["share_png"] = share_image.render_to_bytes(
+                events, clock=clk, match_name=state.get("match_name", ""))
+        except Exception as exc:
+            st.error(f"Could not build image: {exc}")
+    share_png = st.session_state.get("share_png")
+    if share_png:
+        st.image(share_png, width="stretch")
+        st.download_button(
+            "Download image (.png)", share_png,
+            file_name=f"kickoff_summary_{time.strftime('%Y%m%d_%H%M%S')}.png",
+            mime="image/png", width="stretch")
+        st.caption("Portrait card sized for texting. On your phone, tap and hold "
+                   "to save or share it.")
