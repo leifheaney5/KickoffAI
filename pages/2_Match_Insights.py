@@ -49,6 +49,38 @@ st.markdown(
     unsafe_allow_html=True)
 st.caption(f"AI analysis  ·  Home {home['Goals']}–{away['Goals']} Away  ·  {clock}  ·  {len(events)} events")
 
+# --------------------------------------------------------------------------- #
+# Synopsis recordings — play back your recorded thoughts
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Synopsis recordings"), unsafe_allow_html=True)
+notes = control.load_notes()
+if notes:
+    st.caption("Play back the thoughts you recorded on the dashboard "
+               "(“Record thoughts / synopsis”). Newest first.")
+    for n in reversed(notes):
+        rc1, rc2 = st.columns([3, 2], vertical_alignment="center")
+        with rc1:
+            st.markdown(
+                f"<div class='kp-feed'><div class='body'><div class='top'>"
+                f"<span class='t'>{n.get('match_time') or ''}</span></div>"
+                f"<div class='sum'>{html.escape(n.get('text', ''))}</div>"
+                f"</div></div>", unsafe_allow_html=True)
+        with rc2:
+            audio = n.get("audio")
+            if audio and os.path.exists(audio):
+                st.audio(audio)
+            else:
+                st.caption("No audio saved for this note.")
+            if st.button("Delete", key=f"ins_delnote_{n['timestamp']}",
+                         width="stretch"):
+                control.delete_note(n["timestamp"])
+                st.rerun()
+else:
+    st.caption("No synopsis recordings yet. Use “Record thoughts / synopsis” "
+               "on the dashboard to capture one.")
+
+st.write("")
+
 if not events:
     st.info("No events yet. Narrate the match on the dashboard, then come back "
             "for momentum and AI analysis.")

@@ -18,6 +18,7 @@ import os
 import shutil
 from datetime import datetime
 
+import control
 import stats as S
 import timeline_image as TL
 
@@ -66,10 +67,29 @@ def _collect(events):
     }
 
 
+def _roster_lines(lineups, team) -> list:
+    """Render a team's roster as display lines like '#6  Smith'."""
+    lines = []
+    for p in control.roster_for(lineups, team):
+        num = str(p.get("number") or "").strip()
+        name = str(p.get("name") or "").strip()
+        label = (f"#{num} {name}".strip() if num else name).strip()
+        if label:
+            lines.append(label)
+    return lines
+
+
+def _lineup_heading(lineups, team) -> str:
+    """'HOME (4-3-3)' when a formation is set, else 'HOME'."""
+    form = control.lineup_formation(lineups, team)
+    return team.upper() + (f" ({form})" if form else "")
+
+
 # --------------------------------------------------------------------------- #
 # Plain-text report
 # --------------------------------------------------------------------------- #
-def build_text(events, data, summary, clock, match_name="") -> str:
+def build_text(events, data, summary, clock, match_name="", lineups=None,
+               notes=None) -> str:
     home, away = data["home"], data["away"]
     L = []
     w = 56
@@ -90,11 +110,27 @@ def build_text(events, data, summary, clock, match_name="") -> str:
     L.append("")
     L.append(f"FINAL SCORE   HOME {home['Goals']}  -  {away['Goals']} AWAY")
     L.append("")
+
+    # Starting lineups (optional)
+    if control.has_lineups(lineups):
+        hl = _roster_lines(lineups, "Home")
+        al = _roster_lines(lineups, "Away")
+        rule("-")
+        L.append("STARTING LINEUPS")
+        rule("-")
+        L.append(f"{_lineup_heading(lineups, 'Home'):<28}"
+                 f"{_lineup_heading(lineups, 'Away'):<28}")
+        for i in range(max(len(hl), len(al))):
+            h = hl[i] if i < len(hl) else ""
+            a = al[i] if i < len(al) else ""
+            L.append(f"{h[:27]:<28}{a[:27]:<28}")
+        L.append("")
+
     rule("-")
     L.append(f"{'HOME':>10}   {'STAT':^18}   {'AWAY':<10}")
     rule("-")
     for k in S.STAT_KEYS:
-        L.append(f"{home[k]:>10}   {k:^18}   {away[k]:<10}")
+        L.append(f"{str(home[k]):>10}   {k:^18}   {str(away[k]):<10}")
     L.append("")
 
     # Player stats
@@ -135,6 +171,16 @@ def build_text(events, data, summary, clock, match_name="") -> str:
             L.append(line)
         L.append("")
 
+    # Recorded thoughts / notes
+    if notes:
+        rule("-")
+        L.append("MATCH NOTES")
+        rule("-")
+        for n in notes:
+            mt = n.get("match_time") or ""
+            L.append(f"  [{mt:>6}]  {n.get('text', '')}")
+        L.append("")
+
     # Full timeline
     rule("-")
     L.append("EVENT TIMELINE")
@@ -150,7 +196,7 @@ def build_text(events, data, summary, clock, match_name="") -> str:
 # PDF report
 # --------------------------------------------------------------------------- #
 def build_pdf(events, data, summary, clock, path, timeline_png=None,
-              match_name=""):
+              match_name="", lineups=None, notes=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
@@ -206,6 +252,46 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     pdf.cell(epw / 2, 11, str(away["Goals"]),
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.ln(6)
+
+    # Possession bar
+    text("Possession", 11, "B", INK, h=7)
+    bx, by, bh = pdf.l_margin, pdf.get_y(), 7
+    hw = epw * (hp / 100.0)
+    pdf.set_fill_color(*HOME_RGB)
+    pdf.rect(bx, by, hw, bh, style="F")
+    pdf.set_fill_color(*AWAY_RGB)
+    pdf.rect(bx + hw, by, epw - hw, bh, style="F")
+    pdf.set_xy(bx, by)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(hw, bh, f" {hp}%", align="L")
+    pdf.cell(epw - hw, bh, f"{ap}% ", align="R")
+    pdf.ln(bh + 4)
+
+    # Starting lineups (optional)
+    if control.has_lineups(lineups):
+        hl = _roster_lines(lineups, "Home")
+        al = _roster_lines(lineups, "Away")
+        text("Starting Lineups", 13, "B", INK, h=8)
+        colw = epw / 2
+        pdf.set_x(pdf.l_margin)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*HOME_RGB)
+        pdf.cell(colw, 6, _lineup_heading(lineups, "Home"), border="B", align="L")
+        pdf.set_text_color(*AWAY_RGB)
+        pdf.cell(colw, 6, _lineup_heading(lineups, "Away"), border="B", align="L",
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*INK)
+        for i in range(max(len(hl), len(al))):
+            h = hl[i] if i < len(hl) else ""
+            a = al[i] if i < len(al) else ""
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(colw, 5, h[:48], align="L")
+            pdf.cell(colw, 5, a[:48], align="L",
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(4)
+
 
     # Team comparison table
     def stat_row(label, hv, av, header=False):
@@ -270,6 +356,20 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         pdf.multi_cell(0, 6, summary)
         pdf.ln(2)
 
+    # Recorded thoughts / notes
+    if notes:
+        text("Match Notes", 13, "B", INK, h=8)
+        for n in notes:
+            pdf.set_x(pdf.l_margin)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(epw * 0.14, 5, n.get("match_time") or "", align="L")
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(*INK)
+            pdf.multi_cell(epw * 0.86, 5, n.get("text", ""),
+                           new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(2)
+
     # Timeline
     text("Event Timeline", 13, "B", INK, h=8)
     pdf.set_font("Helvetica", "", 9)
@@ -309,13 +409,16 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
 # Entry point
 # --------------------------------------------------------------------------- #
 def generate(events=None, summary="", clock="", out_dir=None,
-             data_file=None, archive=True, match_name="") -> dict:
+             data_file=None, archive=True, match_name="", lineups=None,
+             notes=None) -> dict:
     """Generate txt + pdf reports (and archive data). Returns the paths."""
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
     data_file = data_file or S.DATA_FILE
     if events is None:
         events = S.load_events(data_file)
+    if notes is None:
+        notes = control.load_notes()
 
     data = _collect(events)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -332,9 +435,10 @@ def generate(events=None, summary="", clock="", out_dir=None,
         png_path = None
 
     with open(txt_path, "w", encoding="utf-8") as fh:
-        fh.write(build_text(events, data, summary, clock, match_name))
+        fh.write(build_text(events, data, summary, clock, match_name, lineups,
+                            notes))
     build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
-              match_name=match_name)
+              match_name=match_name, lineups=lineups, notes=notes)
 
     result = {"txt": txt_path, "pdf": pdf_path, "events": len(events)}
     if png_path:
@@ -352,7 +456,8 @@ if __name__ == "__main__":
     main_clk, added, half = control.clock_label(state["timer"])
     clock = f"{main_clk}{(' ' + added) if added else ''} ({half})"
     paths = generate(summary=state.get("summary", ""), clock=clock,
-                     match_name=state.get("match_name", ""))
+                     match_name=state.get("match_name", ""),
+                     lineups=state.get("lineups"))
     print("Report written:")
     for k, v in paths.items():
         print(f"  {k}: {v}")

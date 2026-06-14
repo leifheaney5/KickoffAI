@@ -165,7 +165,7 @@ with c1:
         placeholder="Filter event types…",
     )
 with c2:
-    newest_first = st.toggle("Newest first", value=False)
+    newest_first = st.toggle("Newest first", value=True)
 with c3:
     show_denied = st.toggle(
         f"Show denied{f' ({denied_count})' if denied_count else ''}",
