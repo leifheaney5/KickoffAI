@@ -73,6 +73,20 @@ def delete_event(timestamp: str, path: str = None) -> bool:
     return True
 
 
+def pop_last_event(path: str = None) -> dict | None:
+    """Remove and return the most recently logged event, or None if empty.
+
+    Re-reads the file before popping so concurrent tracker writes aren't lost.
+    """
+    path = path or DATA_FILE
+    events = load_events(path)
+    if not events:
+        return None
+    removed = events.pop()
+    save_events(events, path)
+    return removed
+
+
 def update_event(timestamp: str, updates: dict, path: str = None) -> bool:
     """Merge `updates` into the event with the given timestamp.
 
