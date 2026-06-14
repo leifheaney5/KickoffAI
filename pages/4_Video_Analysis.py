@@ -35,6 +35,19 @@ try:
 except Exception as exc:  # pragma: no cover - import guard
     VISION_OK, VISION_ERR = False, str(exc)
 
+def best_device() -> str:
+    """Return the best available torch device: cuda > mps > cpu."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "0"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
 state = control.load_control()
 match_name = (state.get("match_name") or "").strip()
 st.markdown(brand.page_header("VISION", match_name or "Video Analysis"),
@@ -116,6 +129,7 @@ use_pitch = False
 pitch_model = DEFAULT_PITCH_MODEL
 
 m1, m2, m3 = st.columns(3)
+selected_device = best_device()
 if backend.startswith("Roboflow"):
     with m1:
         roboflow_model = st.text_input("Roboflow model id", value=roboflow_model)
@@ -134,6 +148,21 @@ else:
     with m2:
         st.caption("Local YOLO uses person/ball (COCO) unless you point it at "
                    "soccer-trained weights.")
+    with m3:
+        _auto = best_device()
+        _device_options = ["auto", "cpu", "mps", "0"]
+        _device_labels = {
+            "auto": f"Auto ({_auto})",
+            "cpu": "CPU",
+            "mps": "MPS (Apple Silicon)",
+            "0": "CUDA GPU 0",
+        }
+        _device_choice = st.selectbox(
+            "Inference device",
+            _device_options,
+            format_func=lambda x: _device_labels[x],
+        )
+        selected_device = _auto if _device_choice == "auto" else _device_choice
 
 s1, s2, s3, s4 = st.columns(4)
 stride = s1.slider("Frame stride", 1, 15, 6, help="Process 1 of every N frames.")
@@ -165,7 +194,7 @@ if run:
         model_path=model_path,
         roboflow_model=roboflow_model if backend.startswith("Roboflow") else "",
         roboflow_api_key=api_key,
-        device="cpu",
+        device=selected_device if not backend.startswith("Roboflow") else "cpu",
         detection_imgsz=imgsz,
         frame_stride=stride,
         detection_conf=conf,
