@@ -420,6 +420,13 @@ if ctl[4].button(rec_label, width="stretch",
 st.caption("Recording paused — new events are not logged." if paused
            else "Recording — narrate the match into your mic.")
 
+undo_col, _ = st.columns([1, 4])
+if events and undo_col.button("Undo last event", width="stretch"):
+    removed = S.pop_last_event()
+    if removed:
+        kind = removed.get("action") or "event"
+        st.toast(f"Removed: {kind} ({removed.get('team') or 'unknown team'})")
+
 st.write("")
 
 # ---- Background block-out (live mic sensitivity) -------------------------- #
