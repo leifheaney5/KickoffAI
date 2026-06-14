@@ -73,6 +73,24 @@ def delete_event(timestamp: str, path: str = None) -> bool:
     return True
 
 
+def update_event(timestamp: str, updates: dict, path: str = None) -> bool:
+    """Merge `updates` into the event with the given timestamp.
+
+    Returns True if the event was found and written. Re-reads the file first to
+    preserve any events logged since the caller last loaded.
+    """
+    if not timestamp:
+        return False
+    path = path or DATA_FILE
+    events = load_events(path)
+    for e in events:
+        if e.get("timestamp") == timestamp:
+            e.update(updates)
+            save_events(events, path)
+            return True
+    return False
+
+
 def _res(event: dict) -> str:
     return (event.get("result") or "").lower()
 
@@ -109,13 +127,15 @@ def aggregate(rows: list) -> dict:
 
 
 def team_stats(events: list, team: str) -> dict:
-    return aggregate([e for e in events if e.get("team") == team])
+    active = [e for e in events if e.get("status") != "denied"]
+    return aggregate([e for e in active if e.get("team") == team])
 
 
 def player_stats(events: list) -> dict:
     """Return {player: stat_block(+team)} for every named player."""
     players = {}
-    named = [e for e in events if e.get("player")]
+    active = [e for e in events if e.get("status") != "denied"]
+    named = [e for e in active if e.get("player")]
     by_player = {}
     for e in named:
         by_player.setdefault(e["player"], []).append(e)

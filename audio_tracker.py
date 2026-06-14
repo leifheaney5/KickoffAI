@@ -412,6 +412,7 @@ def main():
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "match_time": match_time,
             "raw_text": text,
+            "status": "pending",
             **(event or {
                 "team": None, "player": None, "action": None,
                 "result": None, "location": None,
