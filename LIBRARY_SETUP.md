@@ -37,7 +37,7 @@ python -c "import db; db.init_db()"      # creates the schema
 ### pgAdmin (optional DB browser)
 
 With the `tools` profile running, open <http://localhost:5050>
-(login `admin@kickoff.local` / `kickoff`) and add a server pointing at host
+(login `admin@kickoff.example.com` / `kickoff`) and add a server pointing at host
 `postgres`, port `5432`, user/password `kickoff`.
 
 ## LLM (Ollama) — keep it native on macOS

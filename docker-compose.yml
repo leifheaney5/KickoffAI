@@ -37,7 +37,8 @@ services:
     restart: unless-stopped
     profiles: ["tools"]
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@kickoff.local
+      # NB: pgAdmin rejects reserved domains like .local, so use a normal one.
+      PGADMIN_DEFAULT_EMAIL: admin@kickoff.example.com
       PGADMIN_DEFAULT_PASSWORD: kickoff
       PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:

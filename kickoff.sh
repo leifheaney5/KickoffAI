@@ -17,6 +17,12 @@ DATA_FILE="${KICKOFF_DATA_FILE:-match_data.json}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
 
+# Match library DB: use the Docker Postgres if it's reachable on :5432,
+# otherwise leave KICKOFF_DB_URL unset so db.py falls back to local SQLite.
+if [ -z "${KICKOFF_DB_URL:-}" ] && (: < /dev/tcp/localhost/5432) 2>/dev/null; then
+  export KICKOFF_DB_URL="postgresql+psycopg://kickoff:kickoff@localhost:5432/kickoff"
+fi
+
 green() { printf '\033[0;32m%s\033[0m\n' "$1"; }
 yellow() { printf '\033[0;33m%s\033[0m\n' "$1"; }
 red() { printf '\033[0;31m%s\033[0m\n' "$1"; }
@@ -68,6 +74,15 @@ else
     red "  Ollama is not installed. Install with: brew install ollama"
     yellow "  Continuing anyway — speech will be transcribed but not parsed."
   fi
+fi
+
+# --------------------------------------------------------------------------- #
+# 2b. Match library database
+# --------------------------------------------------------------------------- #
+if [ -n "${KICKOFF_DB_URL:-}" ]; then
+  green "✓ Match library using Postgres (docker compose up -d)"
+else
+  yellow "• Match library using local SQLite (start Postgres with 'docker compose up -d')"
 fi
 
 # --------------------------------------------------------------------------- #
