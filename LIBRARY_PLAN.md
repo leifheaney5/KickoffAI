@@ -41,6 +41,45 @@ store**, then indexing both in Postgres and surfacing them in a Library UI.
 
 ---
 
+## Infrastructure — what goes in Docker (and what doesn't)
+
+A single `docker-compose.yml` brings up the **stateful services** the app talks
+to over the network. The interactive, hardware-bound pieces stay native.
+
+**In Docker (compose services):**
+
+- **`postgres`** — the match library database. Named volume for persistence,
+  port 5432, healthcheck so dependents wait for it.
+- **`pgadmin`** (optional, `tools` profile) — a browser DB inspector at
+  `localhost:5050` for ad-hoc SQL / poking at rows. Not required by the app.
+- **`ollama`** (optional, `llm` profile) — the local LLM used for event parsing,
+  AI match summaries, and the analyst Q&A. Bundled so a fresh machine gets the
+  whole stack with one command, with a volume for pulled models.
+
+**Stays native (NOT in Docker):**
+
+- **Whisper transcription** — `mlx-whisper` is Apple-Silicon-only and needs live
+  **microphone** access; both are painful/slow through a Mac container.
+- **Vision / YOLO** — MPS acceleration isn't available to containers on macOS,
+  so native inference is materially faster (this is exactly the Phase 5 device
+  work we just shipped).
+- **The Streamlit app + audio tracker** — need mic access and talk to the
+  services above over `localhost`.
+
+**macOS / Apple Silicon caveat (important):** native **Ollama uses Metal GPU**;
+the Docker `ollama` image on a Mac runs **CPU-only** and is slower. On this
+machine Ollama is already installed and serving on `localhost:11434`, so the
+`llm` profile is **opt-in** — the app points at `OLLAMA_URL` (default
+`localhost:11434`), which the native install satisfies. Use the Docker `ollama`
+service for reproducibility or on a Linux box with NVIDIA passthrough; otherwise
+keep native. Either way the app config is identical.
+
+```text
+docker compose up -d                 # postgres only (default)
+docker compose --profile tools up -d # + pgAdmin
+docker compose --profile llm up -d   # + Ollama (skip on Mac if native Ollama runs)
+```
+
 ## Schema (Postgres)
 
 ```text
@@ -91,12 +130,16 @@ media_files                        -- the navigable index of every artifact
 - Add `psycopg[binary]` + `SQLAlchemy` to `requirements.txt`.
 - `db.py`: engine from `KICKOFF_DB_URL`
   (`postgresql+psycopg://…`, default to local SQLite `library.db` if unset),
-  SQLAlchemy models for the schema above, `init_db()` to create tables.
-- Document local Postgres setup (Docker one-liner + `brew` path) in the plan's
-  setup section / a short `LIBRARY_SETUP.md`.
+  SQLAlchemy models for the schema above, `init_db()` to create tables, and a
+  `session()` context manager.
+- `docker-compose.yml`: `postgres` service (default) plus opt-in `tools`
+  (pgAdmin) and `llm` (Ollama) profiles, each with a named volume.
+- `LIBRARY_SETUP.md`: bring-up steps, the `KICKOFF_DB_URL` value, and the
+  macOS-native-Ollama note.
 
-**Done when:** `python -c "import db; db.init_db()"` creates the schema against a
-local Postgres instance.
+**Done when:** `python -c "import db; db.init_db()"` creates the schema (verified
+against the SQLite fallback now; against Dockerized Postgres once Docker is
+installed).
 
 ### Phase 1 — Match entity + media store
 
