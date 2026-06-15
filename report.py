@@ -13,12 +13,15 @@ or programmatically from the dashboard:
     import report; paths = report.generate(summary="...", clock="73:12")
 """
 
+import csv
+import io
 import json
 import os
 import shutil
 from datetime import datetime
 
 import control
+import insights as IN
 import stats as S
 import timeline_image as TL
 
@@ -65,6 +68,59 @@ def _collect(events):
         "players": S.player_stats(events),
         "subs": [e for e in events if e.get("action") == "substitution"],
     }
+
+
+def _conversion(team: dict) -> int:
+    """Goals-per-shot as a percentage (0 when no shots were taken)."""
+    return round(100 * team["Goals"] / team["Shots"]) if team["Shots"] else 0
+
+
+# --------------------------------------------------------------------------- #
+# CSV exports (spreadsheet-friendly: open in Excel / Sheets for analysis)
+# --------------------------------------------------------------------------- #
+EVENT_CSV_FIELDS = ["match_time", "timestamp", "team", "player", "action",
+                    "result", "location", "status", "raw_text"]
+
+
+def build_events_csv(events) -> str:
+    """The full event log as CSV — one row per event."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=EVENT_CSV_FIELDS,
+                            extrasaction="ignore")
+    writer.writeheader()
+    for e in events:
+        writer.writerow({k: e.get(k, "") for k in EVENT_CSV_FIELDS})
+    return buf.getvalue()
+
+
+def build_team_stats_csv(data) -> str:
+    """Head-to-head team stats as CSV (Stat, Home, Away), possession first."""
+    home, away = data["home"], data["away"]
+    hp, ap = S.possession(home, away)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Stat", "Home", "Away"])
+    writer.writerow(["Possession %", hp, ap])
+    writer.writerow(["Shot Conversion %", _conversion(home), _conversion(away)])
+    for k in S.STAT_KEYS:
+        writer.writerow([k, home.get(k, 0), away.get(k, 0)])
+    return buf.getvalue()
+
+
+def build_player_stats_csv(data) -> str:
+    """Per-player stats as CSV, ordered by goals then activity."""
+    players = data["players"]
+    cols = ["Player", "Team", "Events"] + S.STAT_KEYS
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(cols)
+    ordered = sorted(players.items(),
+                     key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
+                     reverse=True)
+    for name, p in ordered:
+        writer.writerow([name, p.get("Team") or "", p.get("Events", 0)]
+                        + [p.get(k, 0) for k in S.STAT_KEYS])
+    return buf.getvalue()
 
 
 def _roster_lines(lineups, team) -> list:
@@ -131,6 +187,19 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     rule("-")
     for k in S.STAT_KEYS:
         L.append(f"{str(home[k]):>10}   {k:^18}   {str(away[k]):<10}")
+    L.append("")
+
+    # Efficiency & possession
+    hp, ap = S.possession(home, away)
+    rule("-")
+    L.append("EFFICIENCY & POSSESSION")
+    rule("-")
+    L.append(f"{f'{hp}%':>10}   {'Possession':^18}   {f'{ap}%':<10}")
+    L.append(f"{f'{_conversion(home)}%':>10}   {'Shot Conversion':^18}   "
+             f"{f'{_conversion(away)}%':<10}")
+    leader, strength = IN.momentum_leader(events)
+    if leader:
+        L.append(f"  Final momentum favours {leader} (strength {strength:.1f}).")
     L.append("")
 
     # Player stats
@@ -201,6 +270,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     from fpdf.enums import XPos, YPos
 
     home, away = data["home"], data["away"]
+    hp, ap = S.possession(home, away)
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -268,6 +338,13 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     pdf.cell(epw - hw, bh, f"{ap}% ", align="R")
     pdf.ln(bh + 4)
 
+    # Efficiency line: conversion + momentum
+    leader, strength = IN.momentum_leader(events)
+    momentum = f"{leader} +{strength:.1f}" if leader else "Even"
+    text(f"Shot conversion   Home {_conversion(home)}%  /  Away "
+         f"{_conversion(away)}%        Momentum   {momentum}", 9, "", MUTED, h=6)
+    pdf.ln(2)
+
     # Starting lineups (optional)
     if control.has_lineups(lineups):
         hl = _roster_lines(lineups, "Home")
@@ -291,7 +368,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
             pdf.cell(colw, 5, a[:48], align="L",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(4)
-
 
     # Team comparison table
     def stat_row(label, hv, av, header=False):
@@ -426,6 +502,9 @@ def generate(events=None, summary="", clock="", out_dir=None,
     txt_path = os.path.join(out_dir, f"match_report_{ts}.txt")
     pdf_path = os.path.join(out_dir, f"match_report_{ts}.pdf")
     png_path = os.path.join(out_dir, f"match_timeline_{ts}.png")
+    events_csv_path = os.path.join(out_dir, f"match_events_{ts}.csv")
+    team_csv_path = os.path.join(out_dir, f"match_team_stats_{ts}.csv")
+    player_csv_path = os.path.join(out_dir, f"match_player_stats_{ts}.csv")
 
     # Render the visual timeline image (embedded in the PDF + saved alongside).
     score = (data["home"]["Goals"], data["away"]["Goals"])
@@ -440,7 +519,20 @@ def generate(events=None, summary="", clock="", out_dir=None,
     build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
               match_name=match_name, lineups=lineups, notes=notes)
 
-    result = {"txt": txt_path, "pdf": pdf_path, "events": len(events)}
+    # Spreadsheet-friendly data exports.
+    for csv_path, content in (
+        (events_csv_path, build_events_csv(events)),
+        (team_csv_path, build_team_stats_csv(data)),
+        (player_csv_path, build_player_stats_csv(data)),
+    ):
+        with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+            fh.write(content)
+
+    result = {
+        "txt": txt_path, "pdf": pdf_path, "events": len(events),
+        "events_csv": events_csv_path, "team_csv": team_csv_path,
+        "players_csv": player_csv_path,
+    }
     if png_path:
         result["image"] = png_path
     if archive and os.path.exists(data_file):

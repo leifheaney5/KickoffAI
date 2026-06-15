@@ -31,3 +31,6 @@ match_segments/
 
 # macOS
 .DS_Store
+notes.json
+annotation_frames_360p/
+clip.mp4
