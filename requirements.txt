@@ -25,6 +25,11 @@ watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 fpdf2>=2.7.0
 pillow>=10.0.0
 
+# Match library database (Postgres via Docker; SQLite fallback when
+# KICKOFF_DB_URL is unset). SQLAlchemy keeps the data layer backend-agnostic.
+SQLAlchemy>=2.0.0
+psycopg[binary]>=3.1.0  # PostgreSQL driver (postgresql+psycopg://)
+
 # ---- Optional: local computer-vision pipeline ("the Eye") ----
 # Heavy YOLO/OpenCV/OCR stack for video analysis lives separately so the audio
 # app stays lightweight. Install when you want video analytics:

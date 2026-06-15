@@ -606,6 +606,23 @@ with right:
                                        key=f"dl_{key}")
         st.caption(f"Saved to {os.path.dirname(paths['pdf'])}/")
 
+    # ---- Archive to the match library --------------------------------- #
+    st.markdown(brand.section("Archive to library"), unsafe_allow_html=True)
+    lib_video = st.text_input(
+        "Match video to bundle (optional)", value="",
+        placeholder="path/to/match.mp4", key="lib_video_path")
+    if st.button("Save match to library", width="stretch"):
+        try:
+            import finalize
+            with st.spinner("Archiving match…"):
+                slug = finalize.finalize_match(
+                    events=events, state=state, clock=_match_clock(),
+                    video_path=lib_video.strip() or None)
+            st.success(f"Saved to library as “{slug}”. Open the Match Library "
+                       "page to browse or export it.")
+        except Exception as exc:
+            st.error(f"Could not archive: {exc}")
+
     # Share card — a portrait summary image sized for texting / social.
     st.markdown(brand.section("Share card (mobile)"), unsafe_allow_html=True)
     if st.button("Generate share card", width="stretch"):

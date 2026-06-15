@@ -1,0 +1,65 @@
+# Kickoff Pulse — local infrastructure.
+#
+# Brings up the stateful services the app talks to over the network. The
+# interactive, hardware-bound pieces (Streamlit, mic-driven Whisper, MPS vision)
+# stay native — see LIBRARY_SETUP.md.
+#
+#   docker compose up -d                  # postgres only (default)
+#   docker compose --profile tools up -d  # + pgAdmin   (localhost:5050)
+#   docker compose --profile llm   up -d  # + Ollama    (localhost:11434)
+#
+# macOS note: native Ollama uses the Metal GPU and is faster than this CPU-only
+# container. Skip the `llm` profile if you already run Ollama natively.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: kickoff-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kickoff
+      POSTGRES_PASSWORD: kickoff
+      POSTGRES_DB: kickoff
+    ports:
+      - "5432:5432"
+    volumes:
+      - kickoff_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kickoff -d kickoff"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional browser DB inspector — `--profile tools`.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: kickoff-pgadmin
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@kickoff.local
+      PGADMIN_DEFAULT_PASSWORD: kickoff
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - kickoff_pgadmin:/var/lib/pgadmin
+
+  # Optional local LLM — `--profile llm`. On Apple Silicon prefer native Ollama.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kickoff-ollama
+    restart: unless-stopped
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - kickoff_ollama:/root/.ollama
+
+volumes:
+  kickoff_pgdata:
+  kickoff_pgadmin:
+  kickoff_ollama:

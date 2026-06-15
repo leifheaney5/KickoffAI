@@ -29,6 +29,10 @@ match_segments/
 *.zip
 !annotation_frames.zip
 
+# Match library — local DB + managed media store (regenerable / large)
+library.db
+library/
+
 # macOS
 .DS_Store
 notes.json
