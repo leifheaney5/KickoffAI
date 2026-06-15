@@ -150,6 +150,20 @@ def abs_path(media: db.MediaFile) -> str:
     return os.path.join(LIBRARY_ROOT, media.path)
 
 
+def delete_match(slug: str) -> bool:
+    """Remove a match: its DB row (cascades events + media) then its folder.
+
+    Commits the DB delete first so a filesystem hiccup can't orphan rows.
+    """
+    with db.session() as s:
+        m = s.query(db.Match).filter_by(slug=slug).first()
+        if m is None:
+            return False
+        s.delete(m)
+    shutil.rmtree(match_dir(slug), ignore_errors=True)
+    return True
+
+
 def export_zip(slug: str, manifest: Optional[dict] = None) -> bytes:
     """Zip a match's entire library folder (+ an optional manifest) into bytes.
 

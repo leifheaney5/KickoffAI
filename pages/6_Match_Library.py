@@ -171,6 +171,17 @@ def render_detail(slug):
             if os.path.exists(m["abs"]):
                 st.video(m["abs"])
 
+    # Danger zone — delete the match (DB row + files).
+    with st.expander("Delete this match"):
+        st.caption("Permanently removes the match's database record and every "
+                   "file in its library folder. This cannot be undone.")
+        confirm = st.checkbox("I understand, delete it", key=f"del_ok_{slug}")
+        if st.button("Delete match", disabled=not confirm,
+                     key=f"del_btn_{slug}"):
+            library.delete_match(slug)
+            st.session_state.pop("lib_selected", None)
+            st.rerun()
+
 
 # --------------------------------------------------------------------------- #
 # List view
@@ -180,9 +191,25 @@ def render_list():
     st.markdown(brand.page_header("LIBRARY", match_name), unsafe_allow_html=True)
 
     matches = load_matches()
+
+    # Import legacy reports/ artifacts into the library.
+    with st.expander("Import existing reports"):
+        st.caption("Scan the reports/ folder and import any past matches that "
+                   "aren't in the library yet.")
+        if st.button("Import from reports/"):
+            import backfill
+            with st.spinner("Importing…"):
+                added = backfill.backfill_reports()
+            if added:
+                st.success(f"Imported {len(added)} match(es).")
+                st.rerun()
+            else:
+                st.info("Nothing new to import.")
+
     if not matches:
         st.info("No matches in the library yet. Finalize a match from the "
-                "dashboard's export panel to archive it here.")
+                "dashboard's export panel to archive it here, or import past "
+                "reports above.")
         return
 
     q = st.text_input("Search", placeholder="Filter by match or team name…",
