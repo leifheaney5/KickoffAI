@@ -19,9 +19,12 @@ LIBRARY_ROOT so the store stays relocatable.
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import re
 import shutil
+import zipfile
 from datetime import date, datetime
 from typing import Optional
 
@@ -145,3 +148,24 @@ def register_file(session, match: db.Match, kind: str, src_path: str,
 def abs_path(media: db.MediaFile) -> str:
     """Absolute path on disk for a stored MediaFile."""
     return os.path.join(LIBRARY_ROOT, media.path)
+
+
+def export_zip(slug: str, manifest: Optional[dict] = None) -> bytes:
+    """Zip a match's entire library folder (+ an optional manifest) into bytes.
+
+    Because all of a match's files live under library/<slug>/, this is a clean
+    self-contained bundle. Archive names are kept relative to the library root so
+    the zip expands to a single <slug>/ directory.
+    """
+    root = match_dir(slug)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if manifest is not None:
+            zf.writestr(f"{slug}/match.json",
+                        json.dumps(manifest, indent=2, default=str))
+        if os.path.isdir(root):
+            for dirpath, _, files in os.walk(root):
+                for fname in files:
+                    fp = os.path.join(dirpath, fname)
+                    zf.write(fp, os.path.relpath(fp, LIBRARY_ROOT))
+    return buf.getvalue()
