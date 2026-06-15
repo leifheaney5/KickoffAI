@@ -18,6 +18,7 @@ import re
 from datetime import datetime
 
 import db
+import embed
 import library
 import stats as S
 
@@ -55,7 +56,9 @@ def backfill_reports(reports_dir: str = None) -> list:
             groups.setdefault(m.group(1), []).append(fname)
 
     db.init_db()
+    embed.init_vector()  # ensure pgvector table exists (no-op on SQLite)
     created = []
+    pending_index = []
     for ts, files in sorted(groups.items()):
         try:
             dt = datetime.strptime(ts, "%Y%m%d_%H%M%S")
@@ -101,6 +104,15 @@ def backfill_reports(reports_dir: str = None) -> list:
                     location=e.get("location"), raw_text=e.get("raw_text")))
 
             created.append(match.slug)
+            pending_index.append((match.id, name, events))
+
+    # Index for semantic search after the rows are committed (FK + no-op safe).
+    for match_id, name, events in pending_index:
+        try:
+            content = embed.build_content(name, "", events, [])
+            embed.index_match(match_id, content)
+        except Exception:
+            pass
     return created
 
 

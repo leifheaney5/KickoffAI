@@ -21,6 +21,7 @@ from typing import Optional
 
 import control
 import db
+import embed
 import library
 import report
 import stats as S
@@ -81,6 +82,7 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
             lineups=state.get("lineups"))
 
         db.init_db()
+        embed.init_vector()  # ensure pgvector table exists (no-op on SQLite)
         with db.session() as s:
             match = library.create_match(
                 s, name, played_on, home_team, away_team,
@@ -116,6 +118,18 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
                     action=e.get("action"), result=e.get("result"),
                     location=e.get("location"), raw_text=e.get("raw_text")))
 
-            return match.slug
+            slug = match.slug
+            match_id = match.id
+
+        # Index for semantic search AFTER commit (FK requires the match to exist).
+        # No-op on SQLite or if the embedding model is unavailable.
+        try:
+            content = embed.build_content(name, state.get("summary", ""),
+                                          events, notes)
+            embed.index_match(match_id, content)
+        except Exception:
+            pass
+
+        return slug
     finally:
         shutil.rmtree(stage, ignore_errors=True)

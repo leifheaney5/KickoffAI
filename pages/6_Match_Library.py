@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import brand           # noqa: E402
 import db              # noqa: E402
+import embed           # noqa: E402
 import library         # noqa: E402
 
 st.set_page_config(page_title=f"{brand.NAME} — Match Library",
@@ -47,11 +48,11 @@ def load_matches():
                 .all())
         for m in rows:
             out.append({
-                "slug": m.slug, "name": m.name, "played_on": m.played_on,
-                "home_team": m.home_team, "away_team": m.away_team,
-                "home_score": m.home_score, "away_score": m.away_score,
-                "summary": m.summary, "n_media": len(m.media),
-                "n_events": len(m.events),
+                "id": str(m.id), "slug": m.slug, "name": m.name,
+                "played_on": m.played_on, "home_team": m.home_team,
+                "away_team": m.away_team, "home_score": m.home_score,
+                "away_score": m.away_score, "summary": m.summary,
+                "n_media": len(m.media), "n_events": len(m.events),
             })
     return out
 
@@ -212,9 +213,33 @@ def render_list():
                 "reports above.")
         return
 
-    q = st.text_input("Search", placeholder="Filter by match or team name…",
-                      label_visibility="collapsed")
-    if q:
+    semantic = False
+    if embed.is_enabled():
+        sc1, sc2 = st.columns([4, 1], vertical_alignment="center")
+        q = sc1.text_input(
+            "Search", placeholder="Search by name, team, or meaning…",
+            label_visibility="collapsed")
+        semantic = sc2.toggle("AI search", value=False,
+                              help="Rank by meaning using semantic embeddings "
+                              "instead of exact text matching.")
+    else:
+        q = st.text_input("Search", placeholder="Filter by match or team name…",
+                          label_visibility="collapsed")
+
+    if q and semantic:
+        results = embed.search(q, k=len(matches))
+        if results is None:
+            st.warning("Semantic search is unavailable (is Ollama running?). "
+                       "Showing all matches.")
+        else:
+            order = {mid: i for i, (mid, _) in enumerate(results)}
+            scores = {mid: sc for mid, sc in results}
+            ranked = [m for m in matches if m["id"] in order]
+            ranked.sort(key=lambda m: order[m["id"]])
+            for m in ranked:
+                m["_score"] = scores.get(m["id"])
+            matches = ranked
+    elif q:
         ql = q.lower()
         matches = [m for m in matches if ql in (m["name"] or "").lower()
                    or ql in (m["home_team"] or "").lower()
@@ -224,12 +249,17 @@ def render_list():
     for m in matches:
         c1, c2, c3 = st.columns([5, 2, 1.4], vertical_alignment="center")
         with c1:
+            score_chip = ""
+            if m.get("_score") is not None:
+                score_chip = (f" · <span style='color:#2BE7FF'>"
+                              f"{m['_score']*100:.0f}% match</span>")
             st.markdown(
                 f"<div style='font-family:var(--font-disp);font-weight:700;"
                 f"font-size:1.05rem;color:#fff'>{m['name']}</div>"
                 f"<div style='color:#9fb6dd;font-size:.85rem'>"
                 f"{_fmt_date(m['played_on'])} · {m['n_media']} files · "
-                f"{m['n_events']} events</div>", unsafe_allow_html=True)
+                f"{m['n_events']} events{score_chip}</div>",
+                unsafe_allow_html=True)
         with c2:
             st.markdown(
                 f"<div style='text-align:center;font-family:var(--font-mono);"

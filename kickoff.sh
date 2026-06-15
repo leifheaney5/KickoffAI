@@ -16,6 +16,7 @@ VENV_DIR=".venv"
 DATA_FILE="${KICKOFF_DATA_FILE:-match_data.json}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
+EMBED_MODEL="${KICKOFF_EMBED_MODEL:-nomic-embed-text}"
 
 # Match library DB: use the Docker Postgres if it's reachable on :5432,
 # otherwise leave KICKOFF_DB_URL unset so db.py falls back to local SQLite.
@@ -57,6 +58,12 @@ if curl -fsS "$OLLAMA_URL/api/version" >/dev/null 2>&1; then
     ollama pull "$OLLAMA_MODEL" || red "  Could not pull '$OLLAMA_MODEL'. Parsing may fail."
   else
     green "✓ Model '$OLLAMA_MODEL' is available"
+  fi
+  # Embedding model powers the library's semantic search (optional).
+  if [ -n "${KICKOFF_DB_URL:-}" ] && \
+     ! curl -fsS "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "$EMBED_MODEL"; then
+    yellow "⚠ Embedding model '$EMBED_MODEL' not found. Pulling for semantic search…"
+    ollama pull "$EMBED_MODEL" || yellow "  Skipped — semantic search will be disabled."
   fi
 else
   red "⚠ Ollama is NOT reachable at $OLLAMA_URL."
