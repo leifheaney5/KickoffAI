@@ -51,7 +51,8 @@ def slugify(name: str, played_on: Optional[date] = None) -> str:
         -> "2026-06-10-hub-city-fc-vs-fc-frederick"
     """
     base = re.sub(r"[^a-z0-9]+", "-", (name or "match").lower()).strip("-")
-    base = base or "match"
+    # Strip any leading YYYY-MM-DD so a date-prefixed name isn't doubled up.
+    base = re.sub(r"^\d{4}-\d{2}-\d{2}-?", "", base) or "match"
     if played_on:
         return f"{played_on.isoformat()}-{base}"
     return base
