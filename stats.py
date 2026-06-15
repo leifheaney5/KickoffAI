@@ -6,6 +6,8 @@ Pure functions used by both the dashboard and the report generator, so the
 aggregation logic lives in exactly one place.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import tempfile
@@ -20,7 +22,7 @@ TEAMS = ("Home", "Away")
 # Stat rows shown for each team / player, in display order.
 STAT_KEYS = [
     "Goals", "Shots", "On Target", "Saves", "Tackles", "Fouls",
-    "Yellow Cards", "Red Cards", "Corners", "Offsides",
+    "Yellow Cards", "Red Cards", "Corners", "Offsides", "Passes",
 ]
 
 
@@ -136,6 +138,7 @@ def aggregate(rows: list) -> dict:
         "Red Cards": card("red"),
         "Corners": sum(1 for a in actions if a == "corner"),
         "Offsides": sum(1 for a in actions if a == "offside"),
+        "Passes": sum(1 for a in actions if a == "pass"),
         "Subs": sum(1 for a in actions if a == "substitution"),
     }
 
@@ -161,5 +164,35 @@ def player_stats(events: list) -> dict:
         block["Events"] = len(rows)
         players[player] = block
     return players
+
+
+# Weights for the possession estimate: on-ball actions that imply a team has
+# the ball. Audio tracking has no ball telemetry, so possession is approximated
+# from the share of these events (passes dominate; set pieces count for less).
+_POSSESSION_WEIGHTS = {
+    "Passes": 1.0,
+    "Shots": 1.0,
+    "On Target": 0.5,
+    "Corners": 0.5,
+    "Goals": 1.0,
+}
+
+
+def possession(home: dict, away: dict) -> tuple:
+    """Estimate possession percentages (home, away) as integers summing to 100.
+
+    Derived from each side's share of on-ball actions (see _POSSESSION_WEIGHTS).
+    Falls back to a 50/50 split when there is nothing to go on, so callers can
+    always render a bar without guarding for empty data.
+    """
+    def weight(team: dict) -> float:
+        return sum(team.get(k, 0) * w for k, w in _POSSESSION_WEIGHTS.items())
+
+    h, a = weight(home), weight(away)
+    total = h + a
+    if total <= 0:
+        return 50, 50
+    hp = round(h / total * 100)
+    return hp, 100 - hp
 
 

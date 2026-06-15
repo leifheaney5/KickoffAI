@@ -566,71 +566,60 @@ with right:
     st.selectbox("Spotlight a player", ["—"] + names,
                  key="spotlight", label_visibility="collapsed")
 
-    st.markdown(brand.section("Export report", "EXPORT"), unsafe_allow_html=True)
-    if st.button("Share card", width="stretch"):
-        try:
-            import share_image
-            main_clk, added, half = control.clock_label(state["timer"])
-            clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
-            home_s = S.team_stats(events, "Home")
-            away_s = S.team_stats(events, "Away")
-            score = (home_s["Goals"], away_s["Goals"])
-            card_bytes = share_image.render_to_bytes(
-                events, score=score, clock=clk,
-                match_name=state.get("match_name", ""))
-            st.session_state["share_card_bytes"] = card_bytes
-        except Exception as exc:
-            st.error(f"Share card failed: {exc}")
+    st.markdown(brand.section("Export & data", "EXPORT"), unsafe_allow_html=True)
 
-    if st.session_state.get("share_card_bytes"):
-        st.download_button(
-            "Download share card (PNG)",
-            data=st.session_state["share_card_bytes"],
-            file_name="match_summary.png",
-            mime="image/png",
-            width="stretch",
-        )
+    def _match_clock() -> str:
+        main_clk, added, half = control.clock_label(state["timer"])
+        return f"{main_clk}{(' ' + added) if added else ''} ({half})"
 
-    if st.button("⬇  Save & export report", type="primary", width="stretch"):
+    if st.button("⬇  Generate report & data", type="primary", width="stretch"):
         try:
-            main_clk, added, half = control.clock_label(state["timer"])
-            clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
             paths = report.generate(events=events,
-                                    summary=state.get("summary", ""), clock=clk,
+                                    summary=state.get("summary", ""),
+                                    clock=_match_clock(),
                                     match_name=state.get("match_name", ""),
                                     lineups=state.get("lineups"))
             st.session_state["report_paths"] = paths
-            st.success(f"Report generated · {paths['events']} events")
+            st.success(f"Generated · {paths['events']} events")
         except Exception as exc:
             st.error(f"Export failed: {exc}")
 
     paths = st.session_state.get("report_paths")
     if paths:
-        with open(paths["txt"], "rb") as fh:
-            st.download_button("Download .txt", fh.read(),
-                               file_name=os.path.basename(paths["txt"]),
-                               mime="text/plain", width="stretch")
-        with open(paths["pdf"], "rb") as fh:
-            st.download_button("Download .pdf", fh.read(),
-                               file_name=os.path.basename(paths["pdf"]),
-                               mime="application/pdf", width="stretch")
+        # (label, key in paths, download filename, MIME) — only shown if present.
+        artifacts = [
+            ("Report (.pdf)", "pdf", "application/pdf"),
+            ("Report (.txt)", "txt", "text/plain"),
+            ("Events (.csv)", "events_csv", "text/csv"),
+            ("Team stats (.csv)", "team_csv", "text/csv"),
+            ("Player stats (.csv)", "players_csv", "text/csv"),
+            ("Raw data (.json)", "data", "application/json"),
+            ("Timeline (.png)", "image", "image/png"),
+        ]
+        for label, key, mime in artifacts:
+            p = paths.get(key)
+            if p and os.path.exists(p):
+                with open(p, "rb") as fh:
+                    st.download_button(label, fh.read(),
+                                       file_name=os.path.basename(p),
+                                       mime=mime, width="stretch",
+                                       key=f"dl_{key}")
         st.caption(f"Saved to {os.path.dirname(paths['pdf'])}/")
 
-    # Mobile share card — a portrait summary image sized for texting.
-    st.markdown(brand.section("Share image (mobile)"), unsafe_allow_html=True)
-    if st.button("Generate share image", width="stretch"):
+    # Share card — a portrait summary image sized for texting / social.
+    st.markdown(brand.section("Share card (mobile)"), unsafe_allow_html=True)
+    if st.button("Generate share card", width="stretch"):
         try:
-            main_clk, added, half = control.clock_label(state["timer"])
-            clk = f"{main_clk}{(' ' + added) if added else ''} ({half})"
             st.session_state["share_png"] = share_image.render_to_bytes(
-                events, clock=clk, match_name=state.get("match_name", ""))
+                events, clock=_match_clock(),
+                match_name=state.get("match_name", ""))
         except Exception as exc:
             st.error(f"Could not build image: {exc}")
     share_png = st.session_state.get("share_png")
     if share_png:
         st.image(share_png, width="stretch")
         st.download_button(
-            "Download image (.png)", share_png,
+            "Download card (.png)", share_png,
             file_name=f"kickoff_summary_{time.strftime('%Y%m%d_%H%M%S')}.png",
             mime="image/png", width="stretch")
         st.caption("Portrait card sized for texting. On your phone, tap and hold "
