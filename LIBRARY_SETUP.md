@@ -17,10 +17,10 @@ python -c "import db; db.init_db()"      # creates the schema
 ## Postgres via Docker (recommended)
 
 1. Install Docker Desktop (macOS) or Docker Engine (Linux).
-2. Start Postgres:
+2. Start the stack:
 
    ```bash
-   docker compose up -d                  # postgres only
+   docker compose up -d                  # postgres + metabase + backups
    docker compose --profile tools up -d  # + pgAdmin at http://localhost:5050
    ```
 
@@ -31,8 +31,49 @@ python -c "import db; db.init_db()"      # creates the schema
    python -c "import db; db.init_db()"
    ```
 
-   Add that `export` to your shell profile (or `kickoff.sh`) so every process —
-   the dashboard, tracker, and library page — uses the same database.
+   `kickoff.sh` auto-detects the Postgres container and sets this for you; add
+   the `export` to your shell profile if you run the app some other way.
+
+### Services & ports
+
+| Service   | URL / port              | What it's for                          |
+|-----------|-------------------------|----------------------------------------|
+| postgres  | `localhost:5432`        | Match library DB (pgvector-enabled)    |
+| metabase  | <http://localhost:3000> | Analytics dashboards over the data     |
+| backup    | (writes to a volume)    | Scheduled `pg_dump` with retention     |
+| pgadmin   | <http://localhost:5050> | DB inspector (`tools` profile)         |
+
+### Analytics (Metabase)
+
+Open <http://localhost:3000>, create the admin account on first run, then add
+the kickoff database as a data source: host `postgres`, port `5432`, database
+`kickoff`, user/password `kickoff`. Metabase keeps its own metadata in a
+separate volume, so it never touches the match schema. From there it auto-builds
+charts over `matches` / `events` / `media_files` — cross-match trends, player
+season totals, possession over time, etc.
+
+### Backups
+
+The `backup` service runs `pg_dump` on a schedule (`@daily`, 14-day / 4-week /
+6-month retention) into the `kickoff_backups` volume. Run one on demand:
+
+```bash
+docker exec kickoff-backup /backup.sh
+docker exec kickoff-backup ls -lh /backups/last
+```
+
+### Semantic search (pgvector + Ollama)
+
+The Match Library page has an **AI search** toggle that ranks matches by meaning,
+not just text. It needs the Postgres backend (pgvector) and a local embedding
+model:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+Matches are embedded automatically when finalized or imported; semantic search
+degrades to plain text filtering if the model or Postgres isn't available.
 
 ### pgAdmin (optional DB browser)
 
