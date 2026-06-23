@@ -261,6 +261,23 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     return "\n".join(L)
 
 
+# The bundled Helvetica is latin-1 only, so map common Unicode punctuation to
+# ASCII and replace anything else, rather than crashing on an em-dash / smart
+# quote in a summary, competition, or player name.
+_PDF_REPLACE = {
+    "—": "-", "–": "-", "‘": "'", "’": "'",
+    "“": '"', "”": '"', "…": "...", "•": "-",
+    " ": " ",
+}
+
+
+def _pdf_safe(s) -> str:
+    s = str(s)
+    for k, v in _PDF_REPLACE.items():
+        s = s.replace(k, v)
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
 # --------------------------------------------------------------------------- #
 # PDF report
 # --------------------------------------------------------------------------- #
@@ -280,7 +297,8 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     def text(txt, size=11, style="", color=INK, h=6, align="L"):
         pdf.set_font("Helvetica", style, size)
         pdf.set_text_color(*color)
-        pdf.cell(0, h, txt, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align=align)
+        pdf.cell(0, h, _pdf_safe(txt), new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+                 align=align)
 
     # Header — brand logo (falls back to a wordmark if the asset is missing)
     import brand
@@ -354,18 +372,19 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*HOME_RGB)
-        pdf.cell(colw, 6, _lineup_heading(lineups, "Home"), border="B", align="L")
+        pdf.cell(colw, 6, _pdf_safe(_lineup_heading(lineups, "Home")),
+                 border="B", align="L")
         pdf.set_text_color(*AWAY_RGB)
-        pdf.cell(colw, 6, _lineup_heading(lineups, "Away"), border="B", align="L",
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(colw, 6, _pdf_safe(_lineup_heading(lineups, "Away")),
+                 border="B", align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*INK)
         for i in range(max(len(hl), len(al))):
             h = hl[i] if i < len(hl) else ""
             a = al[i] if i < len(al) else ""
             pdf.set_x(pdf.l_margin)
-            pdf.cell(colw, 5, h[:48], align="L")
-            pdf.cell(colw, 5, a[:48], align="L",
+            pdf.cell(colw, 5, _pdf_safe(h[:48]), align="L")
+            pdf.cell(colw, 5, _pdf_safe(a[:48]), align="L",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(4)
 
@@ -410,7 +429,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
                     p["Tackles"], p["Fouls"], p["Yellow Cards"], p["Red Cards"]]
             pdf.set_x(pdf.l_margin)
             for (name, frac), v in zip(cols, vals):
-                pdf.cell(epw * frac, 6, str(v), border="B",
+                pdf.cell(epw * frac, 6, _pdf_safe(str(v)), border="B",
                          align="L" if name == "Player" else "C")
             pdf.ln(6)
         pdf.ln(4)
@@ -429,7 +448,7 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         text("Post-Match Summary", 13, "B", INK, h=8)
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*INK)
-        pdf.multi_cell(0, 6, summary)
+        pdf.multi_cell(0, 6, _pdf_safe(summary))
         pdf.ln(2)
 
     # Recorded thoughts / notes
@@ -439,10 +458,11 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
             pdf.set_x(pdf.l_margin)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*MUTED)
-            pdf.cell(epw * 0.14, 5, n.get("match_time") or "", align="L")
+            pdf.cell(epw * 0.14, 5, _pdf_safe(n.get("match_time") or ""),
+                     align="L")
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(*INK)
-            pdf.multi_cell(epw * 0.86, 5, n.get("text", ""),
+            pdf.multi_cell(epw * 0.86, 5, _pdf_safe(n.get("text", "")),
                            new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
 
@@ -452,13 +472,13 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     for e in events:
         pdf.set_x(pdf.l_margin)
         pdf.set_text_color(*MUTED)
-        pdf.cell(epw * 0.14, 5, _event_time(e), align="L")
+        pdf.cell(epw * 0.14, 5, _pdf_safe(_event_time(e)), align="L")
         team = e.get("team")
         pdf.set_text_color(*(HOME_RGB if team == "Home"
                              else AWAY_RGB if team == "Away" else MUTED))
-        pdf.cell(epw * 0.12, 5, team or "-", align="L")
+        pdf.cell(epw * 0.12, 5, _pdf_safe(team or "-"), align="L")
         pdf.set_text_color(*INK)
-        pdf.multi_cell(epw * 0.74, 5, _event_summary(e),
+        pdf.multi_cell(epw * 0.74, 5, _pdf_safe(_event_summary(e)),
                        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Visual timeline image on its own page, scaled to fit.
