@@ -33,6 +33,9 @@ NAVY, PULSE, SIGNAL = brand.NAVY, brand.PULSE, brand.SIGNAL
 st.set_page_config(page_title=brand.NAME, page_icon=brand.LOGO_TRANSPARENT,
                    layout="wide")
 st.markdown(brand.app_css(), unsafe_allow_html=True)
+if not st.session_state.get("kp_splash_seen"):
+    st.session_state["kp_splash_seen"] = True
+    st.markdown(brand.loading_splash(), unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -498,7 +501,10 @@ else:
         st.rerun()
 
     with sc2:
-        st.fragment(run_every=1.0)(render_capture_indicator)()
+        if hasattr(st, "fragment"):
+            st.fragment(run_every=1.0)(render_capture_indicator)()
+        else:
+            render_capture_indicator()
 
     err = st.session_state.get("screen_capture_error")
     if err:
