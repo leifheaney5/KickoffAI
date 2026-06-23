@@ -21,6 +21,10 @@ streamlit-autorefresh>=1.0.1  # fallback live-refresh for Streamlit < 1.37
 pandas>=2.0.0
 watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 
+# Native desktop window (desktop.py / "Kickoff Pulse.app"). On macOS this pulls
+# in the pyobjc Cocoa/WebKit backend so the dashboard runs in its own window.
+pywebview>=5.0
+
 # Report export (email-friendly PDF) + timeline image rendering
 fpdf2>=2.7.0
 pillow>=10.0.0
