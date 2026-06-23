@@ -20,6 +20,7 @@ import brand
 import control
 import icons as IC
 import report
+import screen_recorder
 import share_image
 import stats as S
 
@@ -421,7 +422,15 @@ st.write("")
 # ---- Controls (outside any fragment so interactions never get interrupted) - #
 ctl = st.columns([1, 1, 1, 1, 1.4], vertical_alignment="bottom")
 if ctl[0].button("▶  Start", width="stretch"):
-    control.save_control(control.timer_start(state)); st.rerun()
+    control.save_control(control.timer_start(state))
+    # Auto-start screen capture alongside the match clock (no-op if already
+    # recording or unsupported).
+    if (screen_recorder.is_supported()
+            and not screen_recorder.status()["recording"]):
+        res = screen_recorder.start(label=state.get("match_name", ""))
+        if not res.get("ok"):
+            st.session_state["screen_capture_error"] = res
+    st.rerun()
 if ctl[1].button("⏸  Pause", width="stretch"):
     control.save_control(control.timer_pause(state)); st.rerun()
 if ctl[2].button("⯀  Half", width="stretch"):
@@ -444,6 +453,66 @@ if events and undo_col.button("Undo last event", width="stretch"):
     if removed:
         kind = removed.get("action") or "event"
         st.toast(f"Removed: {kind} ({removed.get('team') or 'unknown team'})")
+
+st.write("")
+
+# ---- Screen capture (records the screen + mic to a video file) ------------ #
+def render_capture_indicator():
+    """Live REC chip — its own fragment so the elapsed time ticks each second."""
+    rs = screen_recorder.status()
+    if rs["recording"]:
+        st.markdown(
+            f"<span style='display:inline-flex;align-items:center;gap:8px'>"
+            f"<span class='dot rec'></span>"
+            f"<span style='color:{SIGNAL};font-weight:600;letter-spacing:.04em'>REC</span> "
+            f"<span class='mono'>{control.fmt_clock(rs['elapsed'])}</span> · "
+            f"{os.path.basename(rs['file'] or '')}</span>",
+            unsafe_allow_html=True)
+    elif rs.get("ended_unexpectedly"):
+        st.caption("Last recording stopped on its own — check Screen Recording "
+                   "permission for your terminal.")
+    else:
+        st.caption("Captures the screen + your mic to a file in recordings/.")
+
+
+st.markdown(brand.section("Screen capture"), unsafe_allow_html=True)
+if not screen_recorder.is_supported():
+    st.caption("Screen recording needs macOS with ffmpeg installed "
+               "(`brew install ffmpeg`).")
+else:
+    recording = screen_recorder.status()["recording"]
+    sc1, sc2 = st.columns([1, 2.4], vertical_alignment="center")
+    if sc1.button("⬛  Stop capture" if recording else "●  Record screen",
+                  type="primary" if recording else "secondary",
+                  width="stretch", key="screen_capture_toggle"):
+        if recording:
+            res = screen_recorder.stop()
+            st.toast(f"Saved {os.path.basename(res['file'])}" if res.get("ok")
+                     else res.get("error", "Could not stop recording."))
+        else:
+            res = screen_recorder.start(label=state.get("match_name", ""))
+            if res.get("ok"):
+                st.session_state.pop("screen_capture_error", None)
+            else:
+                st.session_state["screen_capture_error"] = res
+        st.rerun()
+
+    with sc2:
+        st.fragment(run_every=1.0)(render_capture_indicator)()
+
+    err = st.session_state.get("screen_capture_error")
+    if err:
+        st.error(err.get("error", "Could not start recording."))
+        if err.get("detail"):
+            with st.expander("ffmpeg output"):
+                st.code(err["detail"])
+
+    recs = screen_recorder.list_recordings()
+    if recs:
+        with st.expander(f"Recordings ({len(recs)})"):
+            for r in recs[:12]:
+                mb = r["size"] / (1024 * 1024)
+                st.caption(f"{r['name']} · {mb:.0f} MB · {r['path']}")
 
 st.write("")
 

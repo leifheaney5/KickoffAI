@@ -8,9 +8,11 @@ match_data.json
 match_data.csv
 control.json
 status.json
+recorder.json
 notes.json
 notes_audio/
 reports/
+recordings/
 *.tmp
 
 # Vision pipeline artifacts. Large regenerables stay ignored; the trained model,
