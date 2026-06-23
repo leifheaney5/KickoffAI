@@ -11,6 +11,7 @@ app (timeline, stats) reflects them too.
 
 import os
 import sys
+from collections import deque
 
 import numpy as np
 import streamlit as st
@@ -98,6 +99,34 @@ _LANE_LABELS = ["WIDE", "HALF-SPACE", "CENTRE", "HALF-SPACE", "WIDE"]
 # Centre darkest, half-spaces mid, wide unshaded (matches the reference art).
 _LANE_SHADE = [0.0, 0.18, 0.30, 0.18, 0.0]
 _LAYER_COL = (235, 235, 235)
+_BALL_COL = (0, 215, 255)        # BGR amber
+_OPEN_COL = (90, 220, 90)        # open passing lane
+_BLOCK_COL = (80, 80, 90)        # covered passing lane
+
+# Every layer key the tactical map understands, in human order (drives the UI).
+LAYER_KEYS = ["zones", "half_spaces", "thirds", "team_shape", "avg_position",
+              "space_control", "passing_lanes", "ball_trail"]
+
+
+def _px(x, y, w, h):
+    """Normalised 0..100 pitch coords -> integer pixel coords."""
+    return int(x / 100 * w), int(y / 100 * h)
+
+
+def _team_points(players, team):
+    return [(p.x, p.y) for p in players if p.team == team]
+
+
+def _base_pitch(w, h):
+    """Green field with halfway line, centre circle and penalty boxes."""
+    pitch = np.full((h, w, 3), (40, 110, 40), dtype=np.uint8)
+    cv2.rectangle(pitch, (6, 6), (w - 6, h - 6), (255, 255, 255), 2)
+    cv2.line(pitch, (w // 2, 6), (w // 2, h - 6), (255, 255, 255), 1)
+    cv2.circle(pitch, (w // 2, h // 2), 46, (255, 255, 255), 1)
+    by0, by1 = int(0.21 * h), int(0.79 * h)
+    cv2.rectangle(pitch, (6, by0), (int(0.16 * w), by1), (255, 255, 255), 1)
+    cv2.rectangle(pitch, (int(0.84 * w), by0), (w - 6, by1), (255, 255, 255), 1)
+    return pitch
 
 
 def _draw_half_spaces(pitch, w, h):
@@ -135,29 +164,167 @@ def _draw_zones(pitch, w, h):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, _LAYER_COL, 1, cv2.LINE_AA)
 
 
-def tactical_map(record, w=520, h=340, show_zones=False, show_half_spaces=False):
+def _draw_thirds(pitch, w, h):
+    """Defensive / middle / attacking thirds along the direction of play."""
+    for frac in (1 / 3, 2 / 3):
+        x = int(frac * w)
+        cv2.line(pitch, (x, 6), (x, h - 6), _LAYER_COL, 1, cv2.LINE_AA)
+    for i, lab in enumerate(("DEF", "MID", "ATT")):
+        cx = int((i + 0.5) / 3 * w)
+        (tw, _th), _ = cv2.getTextSize(lab, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+        cv2.putText(pitch, lab, (cx - tw // 2, 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, _LAYER_COL, 1, cv2.LINE_AA)
+
+
+def _draw_team_shape(pitch, players, w, h):
+    """Convex hull of each team — the space the side is occupying."""
+    for team, col in (("Home", HOME_BGR), ("Away", AWAY_BGR)):
+        pts = [_px(x, y, w, h) for x, y in _team_points(players, team)]
+        if len(pts) < 3:
+            continue
+        hull = cv2.convexHull(np.array(pts, dtype=np.int32))
+        overlay = pitch.copy()
+        cv2.fillConvexPoly(overlay, hull, col)
+        cv2.addWeighted(overlay, 0.16, pitch, 0.84, 0, pitch)
+        cv2.polylines(pitch, [hull], True, col, 1, cv2.LINE_AA)
+
+
+def _draw_avg_position(pitch, players, w, h):
+    """Each team's centroid plus its rearmost and foremost player lines."""
+    for team, col in (("Home", HOME_BGR), ("Away", AWAY_BGR)):
+        pts = _team_points(players, team)
+        if not pts:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        for xx in (min(xs), max(xs)):       # rear / front line of the block
+            lx = int(xx / 100 * w)
+            cv2.line(pitch, (lx, 6), (lx, h - 6), col, 1, cv2.LINE_AA)
+        cx, cy = _px(sum(xs) / len(xs), sum(ys) / len(ys), w, h)
+        cv2.circle(pitch, (cx, cy), 11, col, 2)
+        cv2.drawMarker(pitch, (cx, cy), col, cv2.MARKER_CROSS, 14, 2)
+
+
+def _draw_space_control(pitch, players, w, h):
+    """Voronoi-style space control: tint each region by its nearest team."""
+    pl = [(p.x, p.y, p.team) for p in players if p.team in ("Home", "Away")]
+    if len(pl) < 2:
+        return
+    P = np.array([[x, y] for x, y, _ in pl], dtype=np.float32)
+    cols = np.array([HOME_BGR if t == "Home" else AWAY_BGR for _, _, t in pl],
+                    dtype=np.uint8)
+    gw, gh = 80, 52
+    gx = np.linspace(0, 100, gw, dtype=np.float32)
+    gy = np.linspace(0, 100, gh, dtype=np.float32)
+    grid_x, grid_y = np.meshgrid(gx, gy)
+    cells = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)
+    diff = cells[:, None, :] - P[None, :, :]
+    idx = (diff * diff).sum(axis=2).argmin(axis=1)
+    small = cols[idx].reshape(gh, gw, 3)
+    big = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+    blended = cv2.addWeighted(big, 0.22, pitch, 0.78, 0)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(mask, (6, 6), (w - 6, h - 6), 255, -1)
+    pitch[mask == 255] = blended[mask == 255]
+
+
+def _seg_distance(px, py, ax, ay, bx, by):
+    """Distance from point P to segment AB (in pitch units)."""
+    abx, aby = bx - ax, by - ay
+    denom = abx * abx + aby * aby + 1e-9
+    t = max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / denom))
+    cx, cy = ax + t * abx, ay + t * aby
+    return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+
+def _draw_passing_lanes(pitch, record, w, h, block_thresh=5.0):
+    """From the likely ball carrier, draw lanes to team-mates (open vs covered)."""
+    if record.ball.x is None:
+        return
+    bx, by = record.ball.x, record.ball.y
+    teamed = [p for p in record.players if p.team in ("Home", "Away")]
+    if not teamed:
+        return
+    carrier = min(teamed, key=lambda p: (p.x - bx) ** 2 + (p.y - by) ** 2)
+    opps = [p for p in teamed if p.team != carrier.team]
+    cpt = _px(carrier.x, carrier.y, w, h)
+    for m in teamed:
+        if m.team != carrier.team or m is carrier:
+            continue
+        blocked = any(_seg_distance(o.x, o.y, carrier.x, carrier.y, m.x, m.y)
+                      < block_thresh for o in opps)
+        cv2.line(pitch, cpt, _px(m.x, m.y, w, h),
+                 _BLOCK_COL if blocked else _OPEN_COL, 1, cv2.LINE_AA)
+    cv2.circle(pitch, cpt, 9, _BALL_COL, 2)
+
+
+def _draw_ball_trail(pitch, trail, w, h):
+    """Fading polyline of the ball's recent path."""
+    pts = [_px(x, y, w, h) for x, y in trail if x is not None]
+    n = len(pts)
+    for i in range(1, n):
+        a = i / n                      # newer segments brighter / thicker
+        col = (int(_BALL_COL[0] * a), int(_BALL_COL[1] * a), int(_BALL_COL[2] * a))
+        cv2.line(pitch, pts[i - 1], pts[i], col, 1 + int(2 * a), cv2.LINE_AA)
+
+
+def tactical_map(record, w=520, h=340, layers=None, ball_trail=None):
     """Top-down pitch with player dots (by team) + ball, from normalised coords.
 
-    ``show_zones`` / ``show_half_spaces`` overlay the 18-zone grid and the
-    five-lane half-space bands as toggleable tactical layers.
+    ``layers`` is a dict of ``LAYER_KEYS`` -> bool toggling tactical overlays;
+    ``ball_trail`` is the recent ball path for the trail layer.
     """
-    pitch = np.full((h, w, 3), (40, 110, 40), dtype=np.uint8)
-    cv2.rectangle(pitch, (6, 6), (w - 6, h - 6), (255, 255, 255), 2)
-    cv2.line(pitch, (w // 2, 6), (w // 2, h - 6), (255, 255, 255), 1)
-    cv2.circle(pitch, (w // 2, h // 2), 46, (255, 255, 255), 1)
-    if show_half_spaces:
+    layers = layers or {}
+    pitch = _base_pitch(w, h)
+    # Fills first (under the grid lines), then grids, then per-team shapes.
+    if layers.get("space_control"):
+        _draw_space_control(pitch, record.players, w, h)
+    if layers.get("half_spaces"):
         _draw_half_spaces(pitch, w, h)
-    if show_zones:
+    if layers.get("thirds"):
+        _draw_thirds(pitch, w, h)
+    if layers.get("zones"):
         _draw_zones(pitch, w, h)
+    if layers.get("team_shape"):
+        _draw_team_shape(pitch, record.players, w, h)
+    if layers.get("avg_position"):
+        _draw_avg_position(pitch, record.players, w, h)
+    if layers.get("passing_lanes"):
+        _draw_passing_lanes(pitch, record, w, h)
+    if layers.get("ball_trail") and ball_trail:
+        _draw_ball_trail(pitch, ball_trail, w, h)
+    # Player dots and ball always render on top.
     for p in record.players:
-        cx, cy = int(p.x / 100 * w), int(p.y / 100 * h)
+        cx, cy = _px(p.x, p.y, w, h)
         col = HOME_BGR if p.team == "Home" else AWAY_BGR if p.team == "Away" else (150, 150, 150)
         cv2.circle(pitch, (cx, cy), 6, col, -1)
         cv2.circle(pitch, (cx, cy), 6, (255, 255, 255), 1)
     if record.ball.x is not None:
-        bx, by = int(record.ball.x / 100 * w), int(record.ball.y / 100 * h)
+        bx, by = _px(record.ball.x, record.ball.y, w, h)
         cv2.circle(pitch, (bx, by), 5, (255, 255, 255), -1)
-        cv2.circle(pitch, (bx, by), 7, (0, 215, 255), 2)
+        cv2.circle(pitch, (bx, by), 7, _BALL_COL, 2)
+    return pitch
+
+
+def passing_map(passes, passer=None, w=520, h=340):
+    """Static pitch of completed/failed passes as arrows; optional per-passer."""
+    pitch = _base_pitch(w, h)
+    drawn = 0
+    for d in passes:
+        if passer and d.get("passer") != passer:
+            continue
+        sx, sy = d.get("start_coords", [None, None])
+        ex, ey = d.get("end_coords", [None, None])
+        if None in (sx, sy, ex, ey):
+            continue
+        col = _OPEN_COL if d.get("outcome") == "completed" else (70, 70, 235)
+        a, b = _px(sx, sy, w, h), _px(ex, ey, w, h)
+        cv2.arrowedLine(pitch, a, b, col, 2, cv2.LINE_AA, tipLength=0.18)
+        cv2.circle(pitch, a, 3, col, -1)
+        drawn += 1
+    if drawn == 0:
+        cv2.putText(pitch, "No passes", (w // 2 - 50, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, _LAYER_COL, 1, cv2.LINE_AA)
     return pitch
 
 
@@ -228,13 +395,35 @@ feed_dashboard = st.checkbox(
     help="Bridges detected passes into the event log so the timeline / stats "
     "pages reflect them.")
 
-o1, o2 = st.columns(2)
-show_zones = o1.toggle(
-    "Tactical map: zones (18)", value=False,
-    help="Overlay the six-column x three-row tactical grid (zones 1-18).")
-show_half_spaces = o2.toggle(
-    "Tactical map: half-spaces", value=False,
-    help="Overlay the five lanes: wide / half-space / centre / half-space / wide.")
+with st.expander("Tactical map layers", expanded=False):
+    r1 = st.columns(4)
+    r2 = st.columns(4)
+    map_layers = {
+        "zones": r1[0].toggle(
+            "Zones (18)", value=False,
+            help="Six-column x three-row tactical grid, zones 1-18."),
+        "half_spaces": r1[1].toggle(
+            "Half-spaces", value=False,
+            help="Five lanes: wide / half-space / centre / half-space / wide."),
+        "thirds": r1[2].toggle(
+            "Thirds", value=False,
+            help="Defensive / middle / attacking thirds along the play axis."),
+        "team_shape": r1[3].toggle(
+            "Team shape", value=False,
+            help="Convex hull of each team — the space the side occupies."),
+        "avg_position": r2[0].toggle(
+            "Average position", value=False,
+            help="Each team's centroid plus its rear and front player lines."),
+        "space_control": r2[1].toggle(
+            "Space control", value=False,
+            help="Voronoi-style tint of the pitch by nearest team (dynamic)."),
+        "passing_lanes": r2[2].toggle(
+            "Passing lanes", value=False,
+            help="Open vs covered lanes from the likely ball carrier."),
+        "ball_trail": r2[3].toggle(
+            "Ball trail", value=False,
+            help="Fading polyline of the ball's recent path."),
+    }
 
 run = st.button("Run analysis", type="primary", use_container_width=True)
 st.divider()
@@ -281,6 +470,7 @@ if run:
 
     counters = {"proc": 0, "ball": 0}
     total_frames = max(1, int(max_seconds * 30 / stride))
+    ball_trail = deque(maxlen=25)
 
     analyzer = MatchAnalyzer(cfg, pitch_detector=pitch_detector)
 
@@ -289,11 +479,13 @@ if run:
         n_players = sum(1 for d in detections if d.cls_name == "player")
         has_ball = any(d.cls_name == "ball" for d in detections)
         counters["ball"] += 1 if has_ball else 0
+        if record.ball.x is not None:
+            ball_trail.append((record.ball.x, record.ball.y))
 
         frame_ph.image(annotate(frame, detections), channels="BGR",
                        use_container_width=True, caption=f"Camera · {record.timestamp}")
-        map_ph.image(tactical_map(record, show_zones=show_zones,
-                                  show_half_spaces=show_half_spaces),
+        map_ph.image(tactical_map(record, layers=map_layers,
+                                  ball_trail=list(ball_trail)),
                      channels="BGR", use_container_width=True,
                      caption="Tactical map")
 
@@ -329,6 +521,8 @@ if run:
             st.stop()
 
     prog.progress(1.0, text="Done")
+    # Keep the passes so the passing map survives reruns (selectbox, etc.).
+    st.session_state.kp_va_passes = [p.to_dict() for p in stats.passes]
     poss = stats.possession
     st.success(
         f"Processed {counters['proc']} frames · "
@@ -354,3 +548,20 @@ else:
         "raw detections; the tactical map shows pitch positions from the "
         "homography. Enable **per-frame pitch homography** for panning cameras."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Passing map (post-run; persists across reruns via session_state)
+# --------------------------------------------------------------------------- #
+saved_passes = st.session_state.get("kp_va_passes")
+if saved_passes:
+    st.divider()
+    st.markdown("#### Passing map")
+    passers = sorted({p["passer"] for p in saved_passes if p.get("passer")})
+    sel = st.selectbox("Passer", ["All players"] + passers,
+                       help="Filter the map to one player's passes.")
+    who = None if sel == "All players" else sel
+    st.image(passing_map(saved_passes, who), channels="BGR",
+             use_container_width=True,
+             caption="Green = completed, red = intercepted / incomplete. "
+                     "Arrows run from the ball's start to its end position.")
