@@ -49,6 +49,7 @@ def load_matches():
         for m in rows:
             out.append({
                 "id": str(m.id), "slug": m.slug, "name": m.name,
+                "competition": getattr(m, "competition", "") or "",
                 "played_on": m.played_on, "home_team": m.home_team,
                 "away_team": m.away_team, "home_score": m.home_score,
                 "away_score": m.away_score, "summary": m.summary,
@@ -65,6 +66,7 @@ def load_detail(slug):
             return None
         return {
             "slug": m.slug, "name": m.name, "played_on": m.played_on,
+            "competition": getattr(m, "competition", "") or "",
             "home_team": m.home_team, "away_team": m.away_team,
             "home_score": m.home_score, "away_score": m.away_score,
             "summary": m.summary, "n_events": len(m.events),
@@ -95,11 +97,14 @@ def render_detail(slug):
     home = d["home_team"] or "Home"
     away = d["away_team"] or "Away"
     st.markdown(brand.page_header("LIBRARY", d["name"]), unsafe_allow_html=True)
+    sub = _fmt_date(d["played_on"])
+    if d.get("competition"):
+        sub += f"  ·  {d['competition']}"
     st.markdown(
         f"<div class='panel scoreboard'>"
         f"<div class='sb-side sb-home'><div class='sb-team'>{home}</div>"
         f"<div class='sb-score'>{d['home_score']}</div></div>"
-        f"<div class='sb-center'><div class='sb-half'>{_fmt_date(d['played_on'])}</div>"
+        f"<div class='sb-center'><div class='sb-half'>{sub}</div>"
         f"<div class='sb-clock' style='font-size:1.1rem'>{d['n_events']} events</div></div>"
         f"<div class='sb-side sb-away'><div class='sb-team'>{away}</div>"
         f"<div class='sb-score'>{d['away_score']}</div></div></div>",
@@ -110,7 +115,7 @@ def render_detail(slug):
 
     # Export match (zip of the whole folder + manifest).
     manifest = {
-        "slug": d["slug"], "name": d["name"],
+        "slug": d["slug"], "name": d["name"], "competition": d.get("competition", ""),
         "played_on": d["played_on"], "home_team": home, "away_team": away,
         "score": [d["home_score"], d["away_score"]], "summary": d["summary"],
         "files": [{"kind": m["kind"], "path": m["path"], "label": m["label"],
@@ -253,11 +258,12 @@ def render_list():
             if m.get("_score") is not None:
                 score_chip = (f" · <span style='color:#2BE7FF'>"
                               f"{m['_score']*100:.0f}% match</span>")
+            comp = f" · {m['competition']}" if m.get("competition") else ""
             st.markdown(
                 f"<div style='font-family:var(--font-disp);font-weight:700;"
                 f"font-size:1.05rem;color:#fff'>{m['name']}</div>"
                 f"<div style='color:#9fb6dd;font-size:.85rem'>"
-                f"{_fmt_date(m['played_on'])} · {m['n_media']} files · "
+                f"{_fmt_date(m['played_on'])}{comp} · {m['n_media']} files · "
                 f"{m['n_events']} events{score_chip}</div>",
                 unsafe_allow_html=True)
         with c2:

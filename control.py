@@ -69,6 +69,9 @@ def atomic_replace(tmp: str, dst: str, attempts: int = 40,
 DEFAULT = {
     "paused": False,
     "match_name": "",
+    # Structured match metadata (drives the library record + analytics).
+    "competition": "",
+    "match_date": "",   # ISO YYYY-MM-DD; blank = use today when finalizing
     "timer": {
         "running": False,
         "start_epoch": None,   # wall-clock time when the clock was last started
