@@ -179,6 +179,79 @@ class MatchAnalyzer:
         return stats
 
     # ------------------------------------------------------------------ #
+    # Stepping API — drive the same pipeline one frame at a time. Used for live
+    # sources (e.g. a webcam) where the UI owns the loop so it can stay
+    # responsive (start/stop) instead of blocking inside run().
+    # ------------------------------------------------------------------ #
+    def open(self, source) -> "MatchAnalyzer":
+        """Open a video source (file path or camera index) for stepping."""
+        import cv2
+
+        from .tracking import IdentityManager
+
+        self.identities = IdentityManager(
+            gate=self.config.reid_gate_norm,
+            max_lost_frames=self.config.reid_max_lost_frames,
+        )
+        self._cap = cv2.VideoCapture(source)
+        if not self._cap.isOpened():
+            raise FileNotFoundError(f"Could not open video source: {source!r}")
+        self._source_fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self._frame_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+        self._frame_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+        self._raw_index = -1
+        self._frames = []
+        return self
+
+    def step(self):
+        """Process the next sampled frame.
+
+        Returns ``(raw_index, frame, detections, record)`` or ``None`` when the
+        source is exhausted or ``max_seconds`` is reached. Call repeatedly after
+        :meth:`open`, then :meth:`close` to assemble and save the stats.
+        """
+        cap = getattr(self, "_cap", None)
+        if cap is None:
+            return None
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                return None
+            self._raw_index += 1
+            if self._raw_index % self.config.frame_stride != 0:
+                continue
+            t_sec = self._raw_index / self._source_fps
+            if self.config.max_seconds and t_sec > self.config.max_seconds:
+                return None
+            record = self._process_frame(self._raw_index, t_sec, frame)
+            cap_reached = (
+                self.config.max_frames_recorded
+                and len(self._frames) >= self.config.max_frames_recorded
+            )
+            if not cap_reached:
+                self._frames.append(record)
+            if self.on_frame is not None:
+                self.on_frame(record)
+            return self._raw_index, frame, self._last_detections, record
+
+    def close(self) -> MatchStats:
+        """Release the source and assemble + save the stats document."""
+        cap = getattr(self, "_cap", None)
+        if cap is not None:
+            cap.release()
+            self._cap = None
+        stats = MatchStats(
+            frame_rate_sampled=self.config.sampled_fps_label(
+                getattr(self, "_source_fps", 30.0)),
+            frames=getattr(self, "_frames", []),
+            passes=self.engine.events,
+            possession=self.engine.possession_summary(),
+            coordinate_space="pitch" if self.homography is not None else "image",
+        )
+        stats.save(self.config.output_path)
+        return stats
+
+    # ------------------------------------------------------------------ #
     def _process_frame(
         self, frame_index: int, t_sec: float, frame: np.ndarray
     ) -> FrameRecord:
@@ -190,6 +263,7 @@ class MatchAnalyzer:
                 self.homography = dynamic
 
         detections = self.detector.track(frame)
+        self._last_detections = detections
         grouped = split_by_class(detections)
         players = [d for d in grouped.get(PLAYER, []) if d.track_id is not None]
         balls = grouped.get(BALL, [])

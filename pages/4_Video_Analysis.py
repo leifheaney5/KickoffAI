@@ -329,14 +329,90 @@ def passing_map(passes, passer=None, w=520, h=340):
 
 
 # --------------------------------------------------------------------------- #
+# Live-run helpers (shared by the recorded-video and webcam paths)
+# --------------------------------------------------------------------------- #
+def list_cameras():
+    """Connected camera devices, excluding the screen-capture pseudo-device."""
+    try:
+        import screen_recorder
+        vids, _ = screen_recorder.list_devices()
+        return [(i, n) for i, n in vids if "capture screen" not in n.lower()]
+    except Exception:
+        return []
+
+
+def make_placeholders():
+    """Create the live view placeholders: camera, tactical map, metrics, feed."""
+    v_col, t_col = st.columns(2)
+    p = st.columns(5)
+    return {
+        "frame": v_col.empty(), "map": t_col.empty(),
+        "proc": p[0].empty(), "players": p[1].empty(), "ball": p[2].empty(),
+        "poss": p[3].empty(), "pass": p[4].empty(), "feed": st.empty(),
+    }
+
+
+def render_live(ph, analyzer, counters, frame, dets, record, map_layers, trail):
+    """Update the live placeholders from one processed frame."""
+    counters["proc"] += 1
+    n_players = sum(1 for d in dets if d.cls_name == "player")
+    counters["ball"] += 1 if any(d.cls_name == "ball" for d in dets) else 0
+    if record.ball.x is not None:
+        trail.append((record.ball.x, record.ball.y))
+    ph["frame"].image(annotate(frame, dets), channels="BGR",
+                      use_container_width=True,
+                      caption=f"Camera · {record.timestamp}")
+    ph["map"].image(tactical_map(record, layers=map_layers, ball_trail=list(trail)),
+                    channels="BGR", use_container_width=True, caption="Tactical map")
+    poss = analyzer.engine.possession_summary()
+    events = analyzer.engine.events
+    ball_pct = 100 * counters["ball"] / max(1, counters["proc"])
+    ph["proc"].metric("Frames", counters["proc"])
+    ph["players"].metric("Players", n_players)
+    ph["ball"].metric("Ball seen", f"{ball_pct:.0f}%")
+    ph["poss"].metric("Possession H/A",
+                      f"{poss.team_home_percentage:.0f}/{poss.team_away_percentage:.0f}")
+    ph["pass"].metric("Passes", len(events))
+    if events:
+        lines = []
+        for e in events[-5:][::-1]:
+            d = e.to_dict()
+            lines.append(
+                f"`{d['timestamp']}` **{d['passer']}** → "
+                f"{d['intended_receiver'] or '—'} · {d['pass_type'].replace('_',' ')} "
+                f"· _{d['outcome']}_")
+        ph["feed"].markdown("**Recent passes**\n\n" + "\n\n".join(lines))
+
+
+# --------------------------------------------------------------------------- #
 # Controls
 # --------------------------------------------------------------------------- #
 st.markdown("#### Source & model")
+source_kind = st.radio(
+    "Source", ["Video file", "Webcam (live)"], horizontal=True,
+    help="Analyse a recorded video, or run detection live off a connected camera.")
+
 c1, c2 = st.columns([2, 1])
 with c1:
-    default_video = "soccer_test.mp4" if os.path.exists("soccer_test.mp4") else ""
-    video_path = st.text_input("Video file path", value=default_video,
-                               placeholder="path/to/match.mp4")
+    if source_kind == "Video file":
+        default_video = "soccer_test.mp4" if os.path.exists("soccer_test.mp4") else ""
+        video_path = st.text_input("Video file path", value=default_video,
+                                   placeholder="path/to/match.mp4")
+        cam_index = None
+    else:
+        cams = list_cameras()
+        if cams:
+            labels = {i: f"[{i}] {n}" for i, n in cams}
+            cam_index = st.selectbox(
+                "Camera", [i for i, _ in cams], format_func=lambda i: labels[i],
+                help="Connected webcam / capture device. For pitch analytics, "
+                     "mount it high and wide so the pitch lines are visible.")
+        else:
+            cam_index = st.number_input(
+                "Camera index", min_value=0, max_value=10, value=0, step=1,
+                help="Could not auto-list cameras; enter the device index "
+                     "(0 is usually the built-in camera).")
+        video_path = None
 with c2:
     backend = st.radio("Detection backend", ["Roboflow (cloud)", "Local YOLO"],
                        horizontal=False)
@@ -386,7 +462,10 @@ else:
 
 s1, s2, s3, s4 = st.columns(4)
 stride = s1.slider("Frame stride", 1, 15, 6, help="Process 1 of every N frames.")
-max_seconds = s2.slider("Max seconds", 5, 120, 20)
+if source_kind == "Webcam (live)":
+    max_seconds = s2.slider("Max seconds (0 = until stopped)", 0, 1800, 0, 30)
+else:
+    max_seconds = s2.slider("Max seconds", 5, 120, 20)
 conf = s3.slider("Confidence", 0.1, 0.7, 0.25, 0.05)
 imgsz = s4.select_slider("Image size", [640, 960, 1280], value=960)
 
@@ -425,22 +504,12 @@ with st.expander("Tactical map layers", expanded=False):
             help="Fading polyline of the ball's recent path."),
     }
 
-run = st.button("Run analysis", type="primary", use_container_width=True)
 st.divider()
 
 
-# --------------------------------------------------------------------------- #
-# Live run
-# --------------------------------------------------------------------------- #
-if run:
-    if not video_path or not os.path.exists(video_path):
-        st.error(f"Video not found: {video_path!r}")
-        st.stop()
-    if backend.startswith("Roboflow") and not api_key:
-        st.error("A Roboflow API key is required for the cloud backend.")
-        st.stop()
-
-    cfg = PipelineConfig(
+def build_config():
+    """Build the PipelineConfig from the current control selections."""
+    return PipelineConfig(
         model_path=model_path,
         roboflow_model=roboflow_model if backend.startswith("Roboflow") else "",
         roboflow_api_key=api_key,
@@ -452,86 +521,19 @@ if run:
         ocr_enabled=False,
         # Relax possession a touch for the lower sampled frame-rate.
         possession_frames=max(6, 60 // stride),
+        # Bound memory for open-ended live sessions; unlimited for files.
+        max_frames_recorded=4000 if source_kind == "Webcam (live)" else 0,
         output_path="match_stats.json",
     )
-    pitch_detector = (
-        PitchDetector(cfg, pitch_model)
-        if (use_pitch and backend.startswith("Roboflow")) else None
-    )
 
-    # --- live placeholders ------------------------------------------------- #
-    v_col, t_col = st.columns(2)
-    frame_ph = v_col.empty()
-    map_ph = t_col.empty()
-    mrow = st.columns(5)
-    ph_proc, ph_players, ph_ball, ph_poss, ph_pass = [c.empty() for c in mrow]
-    feed_ph = st.empty()
-    prog = st.progress(0.0, text="Starting…")
 
-    counters = {"proc": 0, "ball": 0}
-    total_frames = max(1, int(max_seconds * 30 / stride))
-    ball_trail = deque(maxlen=25)
+def make_pitch_detector(cfg):
+    return (PitchDetector(cfg, pitch_model)
+            if (use_pitch and backend.startswith("Roboflow")) else None)
 
-    analyzer = MatchAnalyzer(cfg, pitch_detector=pitch_detector)
 
-    def on_det(frame_index, frame, detections, record):
-        counters["proc"] += 1
-        n_players = sum(1 for d in detections if d.cls_name == "player")
-        has_ball = any(d.cls_name == "ball" for d in detections)
-        counters["ball"] += 1 if has_ball else 0
-        if record.ball.x is not None:
-            ball_trail.append((record.ball.x, record.ball.y))
-
-        frame_ph.image(annotate(frame, detections), channels="BGR",
-                       use_container_width=True, caption=f"Camera · {record.timestamp}")
-        map_ph.image(tactical_map(record, layers=map_layers,
-                                  ball_trail=list(ball_trail)),
-                     channels="BGR", use_container_width=True,
-                     caption="Tactical map")
-
-        poss = analyzer.engine.possession_summary()
-        events = analyzer.engine.events
-        ball_pct = 100 * counters["ball"] / max(1, counters["proc"])
-        ph_proc.metric("Frames", counters["proc"])
-        ph_players.metric("Players", n_players)
-        ph_ball.metric("Ball seen", f"{ball_pct:.0f}%")
-        ph_poss.metric("Possession H/A",
-                       f"{poss.team_home_percentage:.0f}/{poss.team_away_percentage:.0f}")
-        ph_pass.metric("Passes", len(events))
-
-        if events:
-            lines = []
-            for e in events[-5:][::-1]:
-                d = e.to_dict()
-                lines.append(
-                    f"`{d['timestamp']}` **{d['passer']}** → "
-                    f"{d['intended_receiver'] or '—'} · {d['pass_type'].replace('_',' ')} "
-                    f"· _{d['outcome']}_")
-            feed_ph.markdown("**Recent passes**\n\n" + "\n\n".join(lines))
-        prog.progress(min(1.0, counters["proc"] / total_frames),
-                      text=f"Processing… {record.timestamp}")
-
-    analyzer.on_detections = on_det
-
-    with st.spinner("Analyzing video…"):
-        try:
-            stats = analyzer.run(video_path)
-        except Exception as exc:
-            st.error(f"Run failed: {exc}")
-            st.stop()
-
-    prog.progress(1.0, text="Done")
-    # Keep the passes so the passing map survives reruns (selectbox, etc.).
-    st.session_state.kp_va_passes = [p.to_dict() for p in stats.passes]
-    poss = stats.possession
-    st.success(
-        f"Processed {counters['proc']} frames · "
-        f"{len(stats.passes)} passes · "
-        f"possession Home {poss.team_home_percentage:.0f}% / "
-        f"Away {poss.team_away_percentage:.0f}%"
-    )
-
-    # Feed the dashboard event log (idempotent: replaces prior vision events).
+def feed_passes_to_dashboard(stats):
+    """Stream detected passes into the dashboard event log (idempotent)."""
     if feed_dashboard and stats.passes:
         events = vbridge.convert(stats.to_dict())
         total = vbridge.write_events(events, "match_data.json",
@@ -539,15 +541,140 @@ if run:
         st.info(f"Streamed {len(events)} pass event(s) into the dashboard "
                 f"({len(total)} events total). Open **Match Timeline** to see them.")
 
-    with open("match_stats.json", "rb") as fh:
-        st.download_button("Download match_stats.json", fh,
-                           file_name="match_stats.json", mime="application/json")
+
+# --------------------------------------------------------------------------- #
+# Recorded video — one blocking pass, streamed via callback
+# --------------------------------------------------------------------------- #
+if source_kind == "Video file":
+    if st.button("Run analysis", type="primary", use_container_width=True):
+        if not video_path or not os.path.exists(video_path):
+            st.error(f"Video not found: {video_path!r}")
+            st.stop()
+        if backend.startswith("Roboflow") and not api_key:
+            st.error("A Roboflow API key is required for the cloud backend.")
+            st.stop()
+
+        cfg = build_config()
+        analyzer = MatchAnalyzer(cfg, pitch_detector=make_pitch_detector(cfg))
+        ph = make_placeholders()
+        prog = st.progress(0.0, text="Starting…")
+        counters = {"proc": 0, "ball": 0}
+        trail = deque(maxlen=25)
+        total_frames = max(1, int(max_seconds * 30 / stride))
+
+        def on_det(frame_index, frame, detections, record):
+            render_live(ph, analyzer, counters, frame, detections, record,
+                        map_layers, trail)
+            prog.progress(min(1.0, counters["proc"] / total_frames),
+                          text=f"Processing… {record.timestamp}")
+
+        analyzer.on_detections = on_det
+        with st.spinner("Analyzing video…"):
+            try:
+                stats = analyzer.run(video_path)
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                st.stop()
+
+        prog.progress(1.0, text="Done")
+        # Keep the passes so the passing map survives reruns (selectbox, etc.).
+        st.session_state.kp_va_passes = [p.to_dict() for p in stats.passes]
+        poss = stats.possession
+        st.success(
+            f"Processed {counters['proc']} frames · "
+            f"{len(stats.passes)} passes · "
+            f"possession Home {poss.team_home_percentage:.0f}% / "
+            f"Away {poss.team_away_percentage:.0f}%"
+        )
+        feed_passes_to_dashboard(stats)
+        with open("match_stats.json", "rb") as fh:
+            st.download_button("Download match_stats.json", fh,
+                               file_name="match_stats.json",
+                               mime="application/json")
+    else:
+        st.caption(
+            "Pick a video and a model, then **Run analysis**. The camera view "
+            "shows raw detections; the tactical map shows pitch positions from "
+            "the homography. Enable **per-frame pitch homography** for panning "
+            "cameras.")
+
+
+# --------------------------------------------------------------------------- #
+# Webcam — live stepping loop, so Start/Stop stays responsive
+# --------------------------------------------------------------------------- #
 else:
-    st.caption(
-        "Pick a video and a model, then **Run analysis**. The camera view shows "
-        "raw detections; the tactical map shows pitch positions from the "
-        "homography. Enable **per-frame pitch homography** for panning cameras."
-    )
+    LIVE = "kp_live"
+    running = st.session_state.get(LIVE + "_running", False)
+
+    def finalize_live():
+        """Stop the camera, assemble stats, and feed the dashboard."""
+        analyzer = st.session_state.get(LIVE + "_analyzer")
+        if analyzer is not None:
+            stats = analyzer.close()
+            st.session_state.kp_va_passes = [p.to_dict() for p in stats.passes]
+            feed_passes_to_dashboard(stats)
+        for k in ("_analyzer", "_running", "_counters", "_trail"):
+            st.session_state.pop(LIVE + k, None)
+
+    cstart, cstop = st.columns(2)
+    start_clicked = cstart.button("●  Start live", type="primary",
+                                  disabled=running, use_container_width=True)
+    stop_clicked = cstop.button("■  Stop", disabled=not running,
+                                use_container_width=True)
+
+    if start_clicked and not running:
+        if backend.startswith("Roboflow") and not api_key:
+            st.error("A Roboflow API key is required for the cloud backend.")
+            st.stop()
+        cfg = build_config()
+        try:
+            analyzer = MatchAnalyzer(cfg, pitch_detector=make_pitch_detector(cfg))
+            analyzer.open(int(cam_index))
+        except Exception as exc:
+            st.error(f"Could not open camera #{cam_index}: {exc}")
+            st.stop()
+        st.session_state[LIVE + "_analyzer"] = analyzer
+        st.session_state[LIVE + "_running"] = True
+        st.session_state[LIVE + "_counters"] = {"proc": 0, "ball": 0}
+        st.session_state[LIVE + "_trail"] = deque(maxlen=25)
+        st.rerun()
+
+    if stop_clicked and running:
+        finalize_live()
+        st.toast("Live analysis stopped.")
+        st.rerun()
+
+    if st.session_state.get(LIVE + "_running"):
+        analyzer = st.session_state[LIVE + "_analyzer"]
+        counters = st.session_state[LIVE + "_counters"]
+        trail = st.session_state[LIVE + "_trail"]
+        st.caption("●  LIVE — analysing webcam. Press **Stop** to finish.")
+        ph = make_placeholders()
+        ended = False
+        for _ in range(2):  # small batch keeps the Stop button responsive
+            try:
+                out = analyzer.step()
+            except Exception as exc:
+                st.error(f"Live step failed: {exc}")
+                finalize_live()
+                st.stop()
+            if out is None:        # max_seconds reached or stream closed
+                ended = True
+                break
+            _, frame, dets, record = out
+            # Re-read layer toggles each tick so they can be flipped live.
+            render_live(ph, analyzer, counters, frame, dets, record,
+                        map_layers, trail)
+        if ended:
+            finalize_live()
+            st.success("Live capture finished.")
+            st.rerun()
+        st.rerun()
+    else:
+        st.caption(
+            "Pick a camera and model, then **Start live**. For useful pitch "
+            "analytics mount the camera high and wide so the lines are visible; "
+            "a low sideline angle still gives detections but a weak tactical map.")
 
 
 # --------------------------------------------------------------------------- #
