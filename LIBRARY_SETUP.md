@@ -52,6 +52,29 @@ separate volume, so it never touches the match schema. From there it auto-builds
 charts over `matches` / `events` / `media_files` — cross-match trends, player
 season totals, possession over time, etc.
 
+The in-app **Season** page already covers the headline cross-match views (league
+table, top scorers, goals per match). For deeper ad-hoc analysis in Metabase,
+paste these into a native SQL question:
+
+```sql
+-- Top scorers (real team names)
+SELECT e.player,
+       CASE e.team WHEN 'Home' THEN m.home_team
+                   WHEN 'Away' THEN m.away_team END AS team,
+       COUNT(*) AS goals
+FROM events e JOIN matches m ON m.id = e.match_id
+WHERE (e.action = 'goal' OR e.result = 'scored') AND e.player IS NOT NULL
+GROUP BY 1, 2 ORDER BY goals DESC;
+
+-- Goals per match over time
+SELECT played_on, name, home_score + away_score AS goals
+FROM matches ORDER BY played_on;
+
+-- Matches per competition
+SELECT COALESCE(NULLIF(competition, ''), '(none)') AS competition, COUNT(*)
+FROM matches GROUP BY 1 ORDER BY 2 DESC;
+```
+
 ### Backups
 
 The `backup` service runs `pg_dump` on a schedule (`@daily`, 14-day / 4-week /
