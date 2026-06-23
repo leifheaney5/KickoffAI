@@ -48,6 +48,19 @@ def test_build_text_has_efficiency_block(sample_events):
     assert "Shot Conversion" in txt
 
 
+def test_pdf_safe_transliterates():
+    assert report._pdf_safe("Round — 9 “x”") == 'Round - 9 "x"'
+
+
+def test_generate_handles_unicode_summary(sample_events, tmp_path):
+    # Em-dash / smart quotes in summary + name must not crash PDF generation.
+    paths = report.generate(events=sample_events,
+                            summary="Frustrating loss — “no end product”",
+                            clock="31:00", out_dir=str(tmp_path), archive=False,
+                            match_name="Spring League — Round 11")
+    assert os.path.exists(paths["pdf"]) and os.path.getsize(paths["pdf"]) > 0
+
+
 def test_generate_produces_all_artifacts(sample_events, tmp_path):
     paths = report.generate(events=sample_events, summary="s", clock="31:00",
                             out_dir=str(tmp_path), archive=False,
