@@ -218,6 +218,32 @@ def render_list():
                 "reports above.")
         return
 
+    # Bulk backup: zip the whole library, or a selected subset, into one file.
+    with st.expander("Zip & export (backup)"):
+        st.caption("Bundle matches into one zip — a local backup of their "
+                   "reports, data, audio, images, and video.")
+        by_label = {f"{m['name']} ({_fmt_date(m['played_on'])})": m
+                    for m in matches}
+        picked = st.multiselect(
+            "Matches to include (leave empty for all)",
+            list(by_label.keys()), default=[])
+        chosen = [by_label[k] for k in picked] if picked else matches
+        manifest = {
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "match_count": len(chosen),
+            "matches": [{"slug": m["slug"], "name": m["name"],
+                         "competition": m.get("competition", ""),
+                         "played_on": m["played_on"],
+                         "score": [m["home_score"], m["away_score"]]}
+                        for m in chosen],
+        }
+        scope = "all matches" if not picked else f"{len(chosen)} match(es)"
+        st.download_button(
+            f"⬇  Zip & export ({scope})",
+            data=library.export_bundle([m["slug"] for m in chosen], manifest),
+            file_name=f"kickoff_library_{datetime.now():%Y%m%d_%H%M%S}.zip",
+            mime="application/zip", type="primary")
+
     semantic = False
     if embed.is_enabled():
         sc1, sc2 = st.columns([4, 1], vertical_alignment="center")

@@ -60,6 +60,24 @@ def test_export_zip_contains_files_and_manifest(lib_env, tmp_path):
     assert any(n.endswith("events.csv") for n in names)
 
 
+def test_export_bundle_multiple_matches(lib_env, tmp_path):
+    db, library = lib_env
+    src = tmp_path / "r.pdf"
+    src.write_text("pdf")
+    slugs = []
+    with db.session() as s:
+        for name in ("Match One", "Match Two"):
+            m = library.create_match(s, name, date(2026, 6, 10))
+            library.register_file(s, m, "report_pdf", str(src), "Report")
+            slugs.append(m.slug)
+    data = library.export_bundle(slugs, {"match_count": 2})
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert any(n == "library_manifest.json" for n in names)
+    # Both match folders present in the bundle.
+    assert any(n.startswith(slugs[0]) for n in names)
+    assert any(n.startswith(slugs[1]) for n in names)
+
+
 def test_delete_match_removes_rows_and_folder(lib_env, tmp_path):
     db, library = lib_env
     src = tmp_path / "r.pdf"

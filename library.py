@@ -184,3 +184,26 @@ def export_zip(slug: str, manifest: Optional[dict] = None) -> bytes:
                     fp = os.path.join(dirpath, fname)
                     zf.write(fp, os.path.relpath(fp, LIBRARY_ROOT))
     return buf.getvalue()
+
+
+def export_bundle(slugs, manifest: Optional[dict] = None) -> bytes:
+    """Zip several matches into one backup archive.
+
+    Each match keeps its own <slug>/ directory; an optional top-level
+    library_manifest.json describes the bundle. Use for "export everything" or an
+    arbitrary user selection from the library.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if manifest is not None:
+            zf.writestr("library_manifest.json",
+                        json.dumps(manifest, indent=2, default=str))
+        for slug in slugs:
+            root = match_dir(slug)
+            if not os.path.isdir(root):
+                continue
+            for dirpath, _, files in os.walk(root):
+                for fname in files:
+                    fp = os.path.join(dirpath, fname)
+                    zf.write(fp, os.path.relpath(fp, LIBRARY_ROOT))
+    return buf.getvalue()
