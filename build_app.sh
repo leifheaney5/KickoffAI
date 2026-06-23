@@ -20,28 +20,36 @@ BUNDLE_ID="com.kickoffpulse.app"
 EXEC_NAME="KickoffPulse"
 APP="build/${APP_NAME}.app"
 SRC_LOGO="branding/kickoff-pulse-logo-white-bg.png"
+PREBUILT_ICON="branding/kickoff-pulse.icns"
+ICON_FILE="build/${EXEC_NAME}.icns"
 
 green() { printf '\033[0;32m%s\033[0m\n' "$1"; }
 
 # --------------------------------------------------------------------------- #
-# 1. Icon (.icns) from the brand logo
+# 1. Icon (.icns) from the brand logo, or the prebuilt brand asset.
 # --------------------------------------------------------------------------- #
-ICONSET="$(mktemp -d)/KickoffPulse.iconset"
-mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" "$SRC_LOGO" \
-    --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  d=$((size * 2))
-  sips -z "$d" "$d" "$SRC_LOGO" \
-    --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
+mkdir -p build
+if [ -f "$PREBUILT_ICON" ]; then
+  cp "$PREBUILT_ICON" "$ICON_FILE"
+else
+  ICONSET="$(mktemp -d)/KickoffPulse.iconset"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$SRC_LOGO" \
+      --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    d=$((size * 2))
+    sips -z "$d" "$d" "$SRC_LOGO" \
+      --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$ICON_FILE"
+fi
 
 # --------------------------------------------------------------------------- #
 # 2. Bundle skeleton
 # --------------------------------------------------------------------------- #
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/${EXEC_NAME}.icns"
+cp "$ICON_FILE" "$APP/Contents/Resources/${EXEC_NAME}.icns"
 
 # --------------------------------------------------------------------------- #
 # 3. Info.plist
@@ -113,12 +121,16 @@ if [ -z "\${KICKOFF_DB_URL:-}" ] && (: < /dev/tcp/localhost/5432) 2>/dev/null; t
   export KICKOFF_DB_URL="postgresql+psycopg://kickoff:kickoff@localhost:5432/kickoff"
 fi
 
-# The venv's Python is a universal2 binary. Launched from Finder/Dock, macOS
-# may default it to the x86_64 slice, but the installed wheels (mlx, torch,
-# numpy) are native-arch only -> "incompatible architecture". Pin to the
-# machine's native arch so it matches a normal terminal launch.
-ARCH="\$(uname -m)"
-echo "[launcher] arch=\$ARCH project=\$PROJECT_DIR"
+# The venv's Python is a universal2 binary, and a *script*-based .app bundle
+# gets launched under Rosetta (x86_64) by launchd. The installed wheels (mlx,
+# torch, numpy) are arm64-only, so that mismatch is fatal. uname -m lies under
+# Rosetta, so detect the real hardware via sysctl and force the native slice.
+if [ "\$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+  ARCH=arm64
+else
+  ARCH=x86_64
+fi
+echo "[launcher] forcing arch=\$ARCH project=\$PROJECT_DIR"
 exec arch "-\$ARCH" .venv/bin/python desktop.py
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/${EXEC_NAME}"
