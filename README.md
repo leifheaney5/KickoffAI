@@ -148,6 +148,9 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 | `KICKOFF_DATA_FILE` | `match_data.json` | Where events are stored |
 | `KICKOFF_CONTROL_FILE` | `control.json` | Pause/timer/summary state |
 | `KICKOFF_REPORTS_DIR` | `reports` | Where exported reports are written |
+| `KICKOFF_RECORD_DIR` | `recordings` | Where screen recordings are saved |
+| `KICKOFF_RECORDER_FILE` | `recorder.json` | Screen recorder runtime state |
+| `KICKOFF_MIC` | system default | Mic index or name substring for narration + screen capture audio |
 
 ## Troubleshooting
 
@@ -157,3 +160,6 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
   (`ollama serve`, or launch the Ollama app).
 - **Dashboard not live-updating:** Streamlit 1.37+ uses native fragments; on
   older versions install `streamlit-autorefresh` (it's in `requirements.txt`).
+- **Screen recording will not start:** install `ffmpeg` (`brew install ffmpeg`)
+  and grant Screen Recording permission to the terminal/Python app that launches
+  Kickoff Pulse, then restart `./kickoff.sh`.

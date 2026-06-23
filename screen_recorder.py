@@ -192,9 +192,14 @@ def start(label: str = "") -> dict:
         cmd += ["-c:a", "aac", "-b:a", "128k"]
     cmd += [outfile]
 
-    log_fh = open(logfile, "w")
-    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                            stdout=log_fh, stderr=log_fh)
+    log_fh = open(logfile, "w", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                stdout=log_fh, stderr=log_fh)
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not start ffmpeg: {exc}"}
+    finally:
+        log_fh.close()
 
     # Give ffmpeg a moment to open the devices; if it dies immediately the most
     # likely cause is a denied Screen Recording permission.
