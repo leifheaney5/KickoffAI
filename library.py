@@ -86,7 +86,7 @@ def _unique_slug(session, base_slug: str) -> str:
 def create_match(session, name: str, played_on: Optional[date] = None,
                  home_team: str = "", away_team: str = "",
                  home_score: int = 0, away_score: int = 0,
-                 summary: str = "") -> db.Match:
+                 summary: str = "", competition: str = "") -> db.Match:
     """Create a Match row (with a unique slug) and its on-disk folder tree.
 
     Caller supplies an open session; the row is added + flushed so `.id`/`.slug`
@@ -98,6 +98,7 @@ def create_match(session, name: str, played_on: Optional[date] = None,
         slug=slug, name=name or slug, played_on=played_on,
         home_team=home_team, away_team=away_team,
         home_score=home_score, away_score=away_score, summary=summary,
+        competition=competition,
     )
     session.add(match)
     session.flush()

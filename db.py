@@ -57,6 +57,7 @@ class Match(Base):
                                           default=uuid.uuid4)
     slug: Mapped[str] = mapped_column(String(200), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(300), default="")
+    competition: Mapped[str] = mapped_column(String(200), default="")
     played_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     home_team: Mapped[str] = mapped_column(String(120), default="")
     away_team: Mapped[str] = mapped_column(String(120), default="")
@@ -143,9 +144,35 @@ def get_engine():
     return _engine
 
 
+# Columns added after the first release — applied idempotently to existing
+# tables so a DB created before they existed picks them up without a migration
+# framework. (table, column, SQL type, default literal)
+_ADDED_COLUMNS = [
+    ("matches", "competition", "VARCHAR(200)", "''"),
+]
+
+
+def _apply_migrations(engine) -> None:
+    """Add any missing post-release columns to existing tables (idempotent)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    for table, column, sqltype, default in _ADDED_COLUMNS:
+        if table not in existing_tables:
+            continue  # create_all will build it fresh with the column present
+        cols = {c["name"] for c in insp.get_columns(table)}
+        if column not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {sqltype} "
+                    f"DEFAULT {default}"))
+
+
 def init_db() -> None:
-    """Create all tables if they don't yet exist."""
-    Base.metadata.create_all(get_engine())
+    """Create all tables if they don't yet exist, then apply column migrations."""
+    engine = get_engine()
+    _apply_migrations(engine)        # ALTER existing tables before/independent of
+    Base.metadata.create_all(engine)  # create_all for any brand-new tables
 
 
 @contextmanager

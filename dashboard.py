@@ -321,8 +321,26 @@ events = S.load_events()
 state = control.load_control()
 players = S.player_stats(events)
 
-# ---- Sidebar: team info --------------------------------------------------- #
+# ---- Sidebar: match setup ------------------------------------------------- #
 with st.sidebar:
+    from datetime import date as _date
+    st.markdown(brand.section("Match setup"), unsafe_allow_html=True)
+    _md = (state.get("match_date") or "").strip()
+    try:
+        _md_val = _date.fromisoformat(_md) if _md else _date.today()
+    except ValueError:
+        _md_val = _date.today()
+    _match_date = st.date_input("Match date", value=_md_val, key="setup_date")
+    _competition = st.text_input(
+        "Competition", value=state.get("competition", ""),
+        placeholder="e.g. Spring League — Round 12", key="setup_competition")
+    if st.button("Save match setup", use_container_width=True,
+                 key="save_match_setup"):
+        state["match_date"] = _match_date.isoformat() if _match_date else ""
+        state["competition"] = _competition.strip()
+        control.save_control(state)
+        st.rerun()
+
     st.markdown(brand.section("Team info"), unsafe_allow_html=True)
     _teams = state.get("teams", {"home": {"name": "", "lineup": ""},
                                   "away": {"name": "", "lineup": ""}})

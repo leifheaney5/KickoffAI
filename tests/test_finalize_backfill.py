@@ -16,6 +16,8 @@ def test_finalize_match(lib_env, sample_events, tmp_path, monkeypatch):
     state = {
         "match_name": "2026-06-10 Hub City FC vs FC Frederick",
         "summary": "Solid win.",
+        "competition": "Spring League — Round 12",
+        "match_date": "2026-06-10",
         "teams": {"home": {"name": "Hub City FC"},
                   "away": {"name": "FC Frederick"}},
         "lineups": {"Home": {"formation": "4-3-3", "players": []},
@@ -28,11 +30,25 @@ def test_finalize_match(lib_env, sample_events, tmp_path, monkeypatch):
     with db.session() as s:
         m = s.query(db.Match).filter_by(slug=slug).one()
         assert m.home_team == "Hub City FC"
+        assert m.competition == "Spring League — Round 12"
         assert m.home_score == 1          # one valid Home goal
         assert len(m.events) == len(sample_events)
         kinds = {mf.kind for mf in m.media}
         assert {"report_pdf", "report_txt", "events_csv", "team_csv",
                 "player_csv", "timeline_png"} <= kinds
+
+
+def test_finalize_composes_name_from_teams(lib_env, sample_events, tmp_path,
+                                           monkeypatch):
+    db, library = lib_env
+    monkeypatch.chdir(tmp_path)
+    import finalize
+    state = {"match_name": "", "match_date": "2026-06-10",
+             "teams": {"home": {"name": "Eagles"}, "away": {"name": "Hawks"}}}
+    slug = finalize.finalize_match(events=sample_events, state=state, notes=[])
+    with db.session() as s:
+        m = s.query(db.Match).filter_by(slug=slug).one()
+        assert m.name == "Eagles vs Hawks"
 
 
 def test_backfill_is_idempotent(lib_env, tmp_path, monkeypatch):

@@ -66,11 +66,28 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
     teams = state.get("teams", {})
-    name = ((state.get("match_name") or "").strip()
-            or datetime.now().strftime("Match %Y-%m-%d %H:%M"))
     home_team = teams.get("home", {}).get("name", "").strip()
     away_team = teams.get("away", {}).get("name", "").strip()
-    played_on = _parse_date(state.get("match_name"))
+    competition = (state.get("competition") or "").strip()
+
+    # Prefer the explicit match_date, then a date in the title, then today.
+    played_on = None
+    md = (state.get("match_date") or "").strip()
+    if md:
+        try:
+            played_on = date.fromisoformat(md)
+        except ValueError:
+            played_on = None
+    if played_on is None:
+        played_on = _parse_date(state.get("match_name"))
+
+    # Name: explicit title, else compose "Home vs Away", else a dated fallback.
+    name = (state.get("match_name") or "").strip()
+    if not name:
+        if home_team or away_team:
+            name = f"{home_team or 'Home'} vs {away_team or 'Away'}"
+        else:
+            name = datetime.now().strftime("Match %Y-%m-%d %H:%M")
 
     # Generate the full report bundle into a throwaway staging dir, then copy the
     # artifacts into the match's permanent folder.
@@ -86,7 +103,8 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
         with db.session() as s:
             match = library.create_match(
                 s, name, played_on, home_team, away_team,
-                home["Goals"], away["Goals"], state.get("summary", ""))
+                home["Goals"], away["Goals"], state.get("summary", ""),
+                competition=competition)
 
             for key, (kind, label) in _REPORT_ARTIFACTS.items():
                 p = paths.get(key)
