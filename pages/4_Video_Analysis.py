@@ -90,12 +90,65 @@ def annotate(frame, detections):
     return img
 
 
-def tactical_map(record, w=520, h=340):
-    """Top-down pitch with player dots (by team) + ball, from normalised coords."""
+# Five-lane (half-space) split, as fractions of pitch width across the play
+# axis. Boundaries align with the penalty-box width so the lanes read like a
+# real pitch: wide / half-space / centre / half-space / wide.
+_LANE_BOUNDS = [0.0, 0.21, 0.37, 0.63, 0.79, 1.0]
+_LANE_LABELS = ["WIDE", "HALF-SPACE", "CENTRE", "HALF-SPACE", "WIDE"]
+# Centre darkest, half-spaces mid, wide unshaded (matches the reference art).
+_LANE_SHADE = [0.0, 0.18, 0.30, 0.18, 0.0]
+_LAYER_COL = (235, 235, 235)
+
+
+def _draw_half_spaces(pitch, w, h):
+    """Five lanes along the play axis: wide / half-space / centre."""
+    for i in range(5):
+        y0 = int(_LANE_BOUNDS[i] * h)
+        y1 = int(_LANE_BOUNDS[i + 1] * h)
+        shade = _LANE_SHADE[i]
+        if shade > 0:
+            overlay = pitch.copy()
+            cv2.rectangle(overlay, (6, y0), (w - 6, y1), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, shade, pitch, 1 - shade, 0, pitch)
+        if i > 0:  # lane divider
+            cv2.line(pitch, (6, y0), (w - 6, y0), _LAYER_COL, 1, cv2.LINE_AA)
+        ty = (y0 + y1) // 2 + 4
+        cv2.putText(pitch, _LANE_LABELS[i], (12, ty),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, _LAYER_COL, 1, cv2.LINE_AA)
+
+
+def _draw_zones(pitch, w, h):
+    """6x3 tactical grid, zones numbered 1-18 (column-major, top->bottom)."""
+    for c in range(1, 6):
+        x = int(c / 6 * w)
+        cv2.line(pitch, (x, 6), (x, h - 6), _LAYER_COL, 1, cv2.LINE_AA)
+    for r in range(1, 3):
+        y = int(r / 3 * h)
+        cv2.line(pitch, (6, y), (w - 6, y), _LAYER_COL, 1, cv2.LINE_AA)
+    for c in range(6):
+        for r in range(3):
+            text = str(c * 3 + r + 1)
+            cx = int((c + 0.5) / 6 * w)
+            cy = int((r + 0.5) / 3 * h)
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.putText(pitch, text, (cx - tw // 2, cy + th // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, _LAYER_COL, 1, cv2.LINE_AA)
+
+
+def tactical_map(record, w=520, h=340, show_zones=False, show_half_spaces=False):
+    """Top-down pitch with player dots (by team) + ball, from normalised coords.
+
+    ``show_zones`` / ``show_half_spaces`` overlay the 18-zone grid and the
+    five-lane half-space bands as toggleable tactical layers.
+    """
     pitch = np.full((h, w, 3), (40, 110, 40), dtype=np.uint8)
     cv2.rectangle(pitch, (6, 6), (w - 6, h - 6), (255, 255, 255), 2)
     cv2.line(pitch, (w // 2, 6), (w // 2, h - 6), (255, 255, 255), 1)
     cv2.circle(pitch, (w // 2, h // 2), 46, (255, 255, 255), 1)
+    if show_half_spaces:
+        _draw_half_spaces(pitch, w, h)
+    if show_zones:
+        _draw_zones(pitch, w, h)
     for p in record.players:
         cx, cy = int(p.x / 100 * w), int(p.y / 100 * h)
         col = HOME_BGR if p.team == "Home" else AWAY_BGR if p.team == "Away" else (150, 150, 150)
@@ -175,6 +228,14 @@ feed_dashboard = st.checkbox(
     help="Bridges detected passes into the event log so the timeline / stats "
     "pages reflect them.")
 
+o1, o2 = st.columns(2)
+show_zones = o1.toggle(
+    "Tactical map: zones (18)", value=False,
+    help="Overlay the six-column x three-row tactical grid (zones 1-18).")
+show_half_spaces = o2.toggle(
+    "Tactical map: half-spaces", value=False,
+    help="Overlay the five lanes: wide / half-space / centre / half-space / wide.")
+
 run = st.button("Run analysis", type="primary", use_container_width=True)
 st.divider()
 
@@ -231,8 +292,10 @@ if run:
 
         frame_ph.image(annotate(frame, detections), channels="BGR",
                        use_container_width=True, caption=f"Camera · {record.timestamp}")
-        map_ph.image(tactical_map(record), channels="BGR",
-                     use_container_width=True, caption="Tactical map")
+        map_ph.image(tactical_map(record, show_zones=show_zones,
+                                  show_half_spaces=show_half_spaces),
+                     channels="BGR", use_container_width=True,
+                     caption="Tactical map")
 
         poss = analyzer.engine.possession_summary()
         events = analyzer.engine.events
