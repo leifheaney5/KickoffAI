@@ -161,12 +161,34 @@ def save_review_audio(audio, write_wav, timestamp: str = None) -> str | None:
 # --------------------------------------------------------------------------- #
 # Learned corrections
 # --------------------------------------------------------------------------- #
+# Parsed corrections are cached and only re-read when the file's mtime changes,
+# so the hot transcription loop does no disk I/O unless a correction was edited.
+_corrections_cache = {"path": None, "mtime": None, "data": []}
+
+
 def load_corrections(path: str = None) -> list:
-    return _read_list(path or CORRECTIONS_FILE)
+    p = path or CORRECTIONS_FILE
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        mtime = None
+    cache = _corrections_cache
+    if cache["path"] == p and cache["mtime"] == mtime:
+        return cache["data"]
+    data = _read_list(p)
+    cache.update(path=p, mtime=mtime, data=data)
+    return data
 
 
 def save_corrections(corrections: list, path: str = None) -> None:
-    _write_list(path or CORRECTIONS_FILE, corrections)
+    p = path or CORRECTIONS_FILE
+    _write_list(p, corrections)
+    # Refresh the cache to the just-written data so the next read skips the disk.
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        mtime = None
+    _corrections_cache.update(path=p, mtime=mtime, data=corrections)
 
 
 def _norm_phrase(text: str) -> str:

@@ -90,6 +90,25 @@ def text_score(actual: str, expected: str | None):
     return SequenceMatcher(None, _clean(actual), _clean(expected)).ratio()
 
 
+def word_error_rate(actual: str, expected: str | None):
+    """Word-level WER: edit distance over word sequences / reference length."""
+    if not expected:
+        return None
+    ref = _clean(expected).split()
+    hyp = _clean(actual).split()
+    if not ref:
+        return None
+    # Levenshtein distance on word tokens.
+    prev = list(range(len(hyp) + 1))
+    for i, r in enumerate(ref, 1):
+        cur = [i]
+        for j, h in enumerate(hyp, 1):
+            cost = 0 if r == h else 1
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+        prev = cur
+    return prev[-1] / len(ref)
+
+
 def event_score(actual: dict, expected: dict | None):
     if not expected:
         return None
@@ -136,26 +155,37 @@ def run_benchmark(cases: list, transcriber=None, parser=None) -> dict:
                 "corrected_text": "",
                 "parsed_event": {},
                 "latency_ms": None,
+                "transcribe_ms": None,
+                "parse_ms": None,
                 "raw_text_score": None,
                 "corrected_text_score": None,
+                "corrected_text_wer": None,
                 "parse_score": None,
             })
             continue
 
         started = time.perf_counter()
         raw, _segments = transcriber.transcribe(audio)
+        transcribe_ms = int((time.perf_counter() - started) * 1000)
+
+        parse_started = time.perf_counter()
         corrected = audio_tracker.apply_corrections(raw)
         event = parser(corrected) or {}
-        latency_ms = int((time.perf_counter() - started) * 1000)
+        parse_ms = int((time.perf_counter() - parse_started) * 1000)
+
         rows.append({
             "audio": audio,
             "error": None,
             "raw_text": raw,
             "corrected_text": corrected,
             "parsed_event": event,
-            "latency_ms": latency_ms,
+            "latency_ms": transcribe_ms + parse_ms,
+            "transcribe_ms": transcribe_ms,
+            "parse_ms": parse_ms,
             "raw_text_score": text_score(raw, case.get("expected_text")),
             "corrected_text_score": text_score(
+                corrected, case.get("expected_text")),
+            "corrected_text_wer": word_error_rate(
                 corrected, case.get("expected_text")),
             "parse_score": event_score(event, case.get("expected_event")),
         })
@@ -170,8 +200,11 @@ def run_benchmark(cases: list, transcriber=None, parser=None) -> dict:
         "count": len(rows),
         "successful": len(scored),
         "avg_latency_ms": avg("latency_ms"),
+        "avg_transcribe_ms": avg("transcribe_ms"),
+        "avg_parse_ms": avg("parse_ms"),
         "avg_raw_text_score": avg("raw_text_score"),
         "avg_corrected_text_score": avg("corrected_text_score"),
+        "avg_corrected_text_wer": avg("corrected_text_wer"),
         "avg_parse_score": avg("parse_score"),
         "rows": rows,
     }
@@ -200,12 +233,16 @@ def main():
         return
 
     print(f"Cases: {result['successful']}/{result['count']} usable")
-    print(f"Avg latency: {result['avg_latency_ms'] or 0:.0f} ms")
+    print(f"Avg latency: {result['avg_latency_ms'] or 0:.0f} ms "
+          f"(transcribe {result['avg_transcribe_ms'] or 0:.0f} ms + "
+          f"parse {result['avg_parse_ms'] or 0:.0f} ms)")
     if result["avg_raw_text_score"] is not None:
         print(f"Raw transcript score: {result['avg_raw_text_score']:.2%}")
     if result["avg_corrected_text_score"] is not None:
         print(f"Corrected transcript score: "
               f"{result['avg_corrected_text_score']:.2%}")
+    if result["avg_corrected_text_wer"] is not None:
+        print(f"Corrected transcript WER: {result['avg_corrected_text_wer']:.2%}")
     if result["avg_parse_score"] is not None:
         print(f"Parse score: {result['avg_parse_score']:.2%}")
 

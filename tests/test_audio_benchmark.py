@@ -32,6 +32,16 @@ def test_run_benchmark_scores_transcript_and_parse(tmp_path, monkeypatch):
     assert row["corrected_text"] == "away number 10 corner"
     assert row["parse_score"] == 1.0
     assert result["successful"] == 1
+    # Latency is split into transcribe + parse and the two sum to the total.
+    assert row["transcribe_ms"] + row["parse_ms"] == row["latency_ms"]
+    assert row["corrected_text_wer"] == 0.0
+    assert result["avg_corrected_text_wer"] == 0.0
+
+
+def test_word_error_rate_counts_word_substitutions():
+    assert B.word_error_rate("away number 10 corner", "away number 10 corner") == 0.0
+    # one substitution out of four reference words
+    assert B.word_error_rate("away number 9 corner", "away number 10 corner") == 0.25
 
 
 def test_cases_from_manifest(tmp_path):
