@@ -38,6 +38,19 @@ def test_review_record_round_trip_and_event_lookup(tmp_path):
     assert AI.review_for_event("evt-1", str(path))["status"] == "approved"
 
 
+def test_load_corrections_caches_until_file_changes(tmp_path):
+    path = str(tmp_path / "corrections.json")
+    AI.add_learned_correction("corn her", "corner", path=path)
+
+    first = AI.load_corrections(path)
+    # No file change -> same cached list object is returned (no re-read).
+    assert AI.load_corrections(path) is first
+
+    AI.add_learned_correction("gold", "goal", path=path)
+    reloaded = AI.load_corrections(path)
+    assert {c["heard"] for c in reloaded} == {"corn her", "gold"}
+
+
 def test_suggested_text_formats_event():
     assert AI.suggested_text({
         "team": "Away",

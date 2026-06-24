@@ -133,3 +133,17 @@ def test_corrected_single_word_soccer_calls_pass_speech_gate(phrase):
     ok, reason = A.is_real_speech(text, [])
 
     assert (ok, reason) == (True, "ok")
+
+
+def test_is_real_speech_rejects_wrapped_hallucination_boilerplate():
+    ok, reason = A.is_real_speech("Thanks for watching so much", [])
+
+    assert (ok, reason) == (False, "filler")
+
+
+def test_is_real_speech_keeps_real_call_with_stray_boilerplate_word():
+    # A long genuine phrase that merely contains a boilerplate fragment survives.
+    ok, _reason = A.is_real_speech(
+        "home number ten please subscribe to a shot on target from the box", [])
+
+    assert ok is True

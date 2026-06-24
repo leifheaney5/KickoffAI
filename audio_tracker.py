@@ -37,6 +37,14 @@ DATA_FILE = os.environ.get("KICKOFF_DATA_FILE", "match_data.json")
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+# Keep the parse from freezing the live loop: a hung Ollama should fail fast to
+# the local keyword fallback rather than block capture for a full minute.
+OLLAMA_TIMEOUT = float(os.environ.get("OLLAMA_TIMEOUT", "15"))
+
+# Suppress an identical event (same action/team/player) repeated within this many
+# seconds — e.g. a commentator shouting "goal, goal!" or two adjacent windows
+# hearing the same call. Set to 0 to disable.
+DEDUPE_SEC = float(os.environ.get("KICKOFF_DEDUPE_SEC", "6"))
 
 # Whisper model size. "medium.en" favors accurate short soccer commands over
 # minimum latency. Override WHISPER_MODEL / WHISPER_MLX_MODEL for speed tests.
@@ -82,6 +90,14 @@ HALLUCINATION_PHRASES = {
     "bye", "okay", "ok", "so", "yeah", "uh", "um", "hmm", "mm",
     "please subscribe", "subtitles by the amara.org community",
 }
+
+# Hallucinated boilerplate that shows up wrapped in extra words (e.g.
+# "thanks for watching so much"), so an exact-phrase match misses it. These are
+# checked as substrings of the normalised transcript.
+HALLUCINATION_SUBSTRINGS = (
+    "thanks for watching", "thank you for watching", "please subscribe",
+    "subtitles by", "amara.org", "like and subscribe",
+)
 
 # Single-word calls a commentator genuinely shouts — exempt from the
 # two-word minimum so a lone "Goal!" / "Corner!" still counts.
@@ -213,6 +229,10 @@ def is_real_speech(text: str, segments: list):
 
     norm = re.sub(r"[^a-z ]+", "", t.lower()).strip()
     if norm in HALLUCINATION_PHRASES:
+        return False, "filler"
+    # Only treat boilerplate as filler when it dominates the phrase, so a real
+    # call that happens to contain a stray word isn't dropped.
+    if len(words) <= 6 and any(s in norm for s in HALLUCINATION_SUBSTRINGS):
         return False, "filler"
 
     # Runaway repetition, both kinds Whisper produces on non-speech:
@@ -557,7 +577,7 @@ def parse_event(text: str, lineups=None, return_source: bool = False):
     }
     try:
         resp = requests.post(
-            f"{OLLAMA_URL}/api/chat", json=payload, timeout=60
+            f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
         )
         resp.raise_for_status()
         content = resp.json()["message"]["content"]
@@ -844,6 +864,9 @@ def main():
 
     paused_notice = False
     last_gate = None
+    mic_failures = 0  # consecutive mic read errors; re-open the device after a few
+    last_event_sig = None  # (action, team, player) of the last logged event
+    last_event_sig_time = 0.0
     while running["flag"]:
         ctrl = control.load_control()
         chunk_cfg = chunking_config(ctrl)
@@ -894,11 +917,25 @@ def main():
                     phrase_time_limit=chunk_cfg["phrase_time_limit"]
                 )
         except sr.WaitTimeoutError:
+            mic_failures = 0
             continue  # no speech in this window; keep listening
         except OSError as exc:
-            print(f"[ear] microphone read error: {exc}", flush=True)
+            mic_failures += 1
+            print(f"[ear] microphone read error ({mic_failures}): {exc}",
+                  flush=True)
+            # A dropped/reconnected device (e.g. AirPods) often returns at a new
+            # index; re-resolve KICKOFF_MIC instead of retrying the stale handle.
+            if mic_failures >= 3:
+                try:
+                    mic = pick_microphone(sr)
+                    print("[ear] re-opened microphone after repeated errors",
+                          flush=True)
+                    mic_failures = 0
+                except OSError as reopen_exc:
+                    print(f"[ear] mic re-open failed: {reopen_exc}", flush=True)
             time.sleep(0.5)
             continue
+        mic_failures = 0
 
         # Drop sub-threshold blips (a cough, a door) before paying for Whisper.
         duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
@@ -1042,6 +1079,35 @@ def main():
 
         event, parser_source = parse_event(
             text, lineups=ctrl.get("lineups"), return_source=True)
+
+        # Drop an identical event repeated within the cooldown (e.g. "goal,
+        # goal!" or two windows hearing the same call). Only de-dupe events that
+        # actually carry an action, and keep the suppression reviewable.
+        sig = ((event or {}).get("action"), (event or {}).get("team"),
+               (event or {}).get("player"))
+        now_mono = time.monotonic()
+        if (DEDUPE_SEC > 0 and sig[0] and sig == last_event_sig
+                and now_mono - last_event_sig_time < DEDUPE_SEC):
+            print(f"[ear] ignored (duplicate): {text[:60]!r}", flush=True)
+            write_review(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                match_time=match_time,
+                event_timestamp=None,
+                audio=audio,
+                raw_text=raw_text,
+                corrected_text=text,
+                event=event,
+                status="ignored",
+                reason="duplicate",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            )
+            status["last_ignored_reason"] = "duplicate"
+            last_event_sig_time = now_mono  # extend the window on repeats
+            control.save_status(status)
+            continue
+        last_event_sig = sig
+        last_event_sig_time = now_mono
+
         event_timestamp = datetime.now(timezone.utc).isoformat()
         record = {
             "timestamp": event_timestamp,

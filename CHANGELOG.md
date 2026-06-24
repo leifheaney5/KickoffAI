@@ -23,6 +23,29 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.6.0] - 2026-06-24
+
+### Added
+
+- Duplicate-event suppression in the audio loop: an identical event
+  (same action/team/player) repeated within `KICKOFF_DEDUPE_SEC` (default 6 s)
+  is dropped and kept as a reviewable record, so "goal, goal!" logs once.
+- Microphone auto-recovery: after repeated read errors the tracker re-resolves
+  `KICKOFF_MIC` and re-opens the device, so a dropped/reconnected input
+  (e.g. AirPods) resumes without a restart.
+- Substring-aware hallucination filter that catches boilerplate wrapped in extra
+  words (e.g. "thanks for watching so much"), not just exact-match fillers.
+- Benchmark now reports transcription vs parse latency separately and a
+  word-level WER alongside the character-ratio scores.
+
+### Changed
+
+- Ollama parse timeout is now configurable via `OLLAMA_TIMEOUT` and defaults to
+  15 s (was a hard-coded 60 s) so a hung model fails fast to the local keyword
+  fallback instead of freezing capture.
+- Learned corrections are cached and re-read only when `corrections.json`
+  changes, removing per-transcript disk I/O from the hot loop.
+
 ## [1.5.0] - 2026-06-24
 
 ### Added
