@@ -197,17 +197,26 @@ _CSS_BODY = """
   }
   .kp-splash-ball-wrap {
     position:relative; width:156px; height:156px; display:grid; place-items:center;
+    animation:kpSplashPulse 1.18s ease-in-out infinite;
+    will-change:transform, filter;
   }
   .kp-splash-ball-wrap::before {
     content:""; position:absolute; inset:16px; border-radius:50%;
     border:1px solid rgba(77,163,255,.42);
     box-shadow:0 0 34px rgba(30,123,255,.38), inset 0 0 18px rgba(43,231,255,.10);
-    animation:kpSplashPulse 1.2s ease-in-out infinite;
+    animation:kpSplashHalo 1.18s ease-in-out infinite;
+  }
+  .kp-splash-ball-wrap::after {
+    content:""; position:absolute; width:92px; height:14px; bottom:4px; border-radius:50%;
+    background:rgba(0,0,0,.30); filter:blur(8px);
+    animation:kpSplashShadow 1.18s ease-in-out infinite;
   }
   .kp-splash-ball-img {
     width:142px; height:142px; object-fit:contain; position:relative; z-index:1;
     filter:drop-shadow(0 18px 34px rgba(0,0,0,.30)) drop-shadow(0 0 22px rgba(77,163,255,.50));
-    animation:kpSplashBall 1.2s ease-in-out infinite;
+    animation:kpSplashSpin .9s linear infinite;
+    transform-origin:50% 50%;
+    will-change:transform;
   }
   .kp-splash-mark {
     font-family:var(--font-disp); color:#fff; font-size:23px;
@@ -219,13 +228,20 @@ _CSS_BODY = """
     background:linear-gradient(90deg,transparent,var(--c-cyan),var(--c-home),transparent);
     box-shadow:0 0 16px rgba(77,163,255,.60); animation:kpSignal 1.2s ease-in-out infinite;
   }
-  @keyframes kpSplashBall {
-    0%,100% { transform:scale(1); filter:brightness(1); }
-    50% { transform:scale(1.045); filter:brightness(1.08); }
+  @keyframes kpSplashSpin {
+    to { transform:rotate(360deg); }
   }
   @keyframes kpSplashPulse {
-    0%,100% { transform:scale(.92); opacity:.52; }
-    50% { transform:scale(1.05); opacity:1; }
+    0%,100% { transform:scale(.94); filter:brightness(1); }
+    50% { transform:scale(1.06); filter:brightness(1.12); }
+  }
+  @keyframes kpSplashHalo {
+    0%,100% { transform:scale(.90); opacity:.42; }
+    50% { transform:scale(1.08); opacity:1; }
+  }
+  @keyframes kpSplashShadow {
+    0%,100% { transform:scaleX(.82); opacity:.24; }
+    50% { transform:scaleX(1); opacity:.40; }
   }
   @keyframes kpSignal {
     0%,100% { transform:scaleX(.78); opacity:.42; }
