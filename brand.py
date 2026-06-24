@@ -76,6 +76,29 @@ def logo_data_uri(which: str = "transparent", max_h: int = 160) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+@lru_cache(maxsize=4)
+def ball_data_uri(max_h: int = 160) -> str:
+    """Return the real soccer-ball mark cropped from the brand logo."""
+    from PIL import Image
+
+    if not os.path.exists(LOGO_DARK):
+        return ""
+    im = Image.open(LOGO_DARK).convert("RGBA")
+    im = im.crop((270, 238, 590, 590))  # real ball + blue wrap, no wordmark
+    canvas = Image.new("RGBA", (im.width + 36, im.height + 36), (0, 0, 0, 0))
+    canvas.alpha_composite(im, (18, 18))
+    im = canvas
+    if im.height > max_h:
+        w = round(im.width * max_h / im.height)
+        im = im.resize((w, max_h), Image.LANCZOS)
+
+    import io
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
 @lru_cache(maxsize=2)
 def logo_pil_white(pad: int = 24):
     """Cropped PIL image of the white-background logo (dark ball) for print/PDF.
@@ -158,6 +181,59 @@ _CSS_BODY = """
   @keyframes kpAppIn { from{opacity:0;transform:translateY(10px) scale(.995);} to{opacity:1;transform:none;} }
   @keyframes kpFade { from{opacity:0;transform:translateY(8px);} to{opacity:1;transform:none;} }
   .kp-reveal { animation: kpFade .6s cubic-bezier(.22,.61,.36,1) both; }
+
+  /* ---- First-load splash ---- */
+  .kp-splash {
+    position:fixed; inset:0; z-index:999999; display:flex;
+    align-items:center; justify-content:center;
+    background:
+      radial-gradient(420px 300px at 50% 42%, rgba(30,123,255,.30), transparent 68%),
+      linear-gradient(165deg,#04102a 0%,#071f4d 56%,#0b2f74 100%);
+    pointer-events:none; animation:kpSplashOut .45s ease var(--kp-splash-hold, 1.35s) forwards;
+  }
+  .kp-splash-stage {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:14px; transform:translateY(-10px); text-align:center;
+  }
+  .kp-splash-ball-wrap {
+    position:relative; width:156px; height:156px; display:grid; place-items:center;
+  }
+  .kp-splash-ball-wrap::before {
+    content:""; position:absolute; inset:16px; border-radius:50%;
+    border:1px solid rgba(77,163,255,.42);
+    box-shadow:0 0 34px rgba(30,123,255,.38), inset 0 0 18px rgba(43,231,255,.10);
+    animation:kpSplashPulse 1.2s ease-in-out infinite;
+  }
+  .kp-splash-ball-img {
+    width:142px; height:142px; object-fit:contain; position:relative; z-index:1;
+    filter:drop-shadow(0 18px 34px rgba(0,0,0,.30)) drop-shadow(0 0 22px rgba(77,163,255,.50));
+    animation:kpSplashBall 1.2s ease-in-out infinite;
+  }
+  .kp-splash-mark {
+    font-family:var(--font-disp); color:#fff; font-size:23px;
+    font-weight:700; letter-spacing:.02em; text-shadow:0 0 22px rgba(77,163,255,.56);
+    animation:kpFade .5s ease .12s both;
+  }
+  .kp-splash-signal {
+    width:92px; height:3px; border-radius:99px;
+    background:linear-gradient(90deg,transparent,var(--c-cyan),var(--c-home),transparent);
+    box-shadow:0 0 16px rgba(77,163,255,.60); animation:kpSignal 1.2s ease-in-out infinite;
+  }
+  @keyframes kpSplashBall {
+    0%,100% { transform:scale(1); filter:brightness(1); }
+    50% { transform:scale(1.045); filter:brightness(1.08); }
+  }
+  @keyframes kpSplashPulse {
+    0%,100% { transform:scale(.92); opacity:.52; }
+    50% { transform:scale(1.05); opacity:1; }
+  }
+  @keyframes kpSignal {
+    0%,100% { transform:scaleX(.78); opacity:.42; }
+    50% { transform:scaleX(1); opacity:1; }
+  }
+  @keyframes kpSplashOut {
+    to { opacity:0; visibility:hidden; transform:scale(1.02); }
+  }
 
   /* ---- Typography ---- */
   h1,h2,h3,h4,h5 { color:#fff !important; font-family:var(--font-disp) !important; font-weight:700; letter-spacing:.01em; }
@@ -350,6 +426,29 @@ def section(title: str, kicker: str = "") -> str:
         f"<h3 class='section-title'>{title}</h3>"
         f"</div>"
         f"</div>"
+    )
+
+
+def loading_splash() -> str:
+    """Brief first-load splash used by the dashboard."""
+    ball = ball_data_uri(150)
+    hold = os.environ.get("KICKOFF_SPLASH_HOLD", "").strip()
+    style = ""
+    if hold:
+        try:
+            style = f" style='--kp-splash-hold:{float(hold):.2f}s'"
+        except ValueError:
+            style = ""
+    return (
+        f"<div class='kp-splash' aria-hidden='true'{style}>"
+        "<div class='kp-splash-stage'>"
+        "<div class='kp-splash-ball-wrap'>"
+        f"<img class='kp-splash-ball-img' src='{ball}' alt=''/>"
+        "</div>"
+        f"<div class='kp-splash-mark'>{NAME}</div>"
+        "<div class='kp-splash-signal'></div>"
+        "</div>"
+        "</div>"
     )
 
 
