@@ -23,6 +23,19 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.3.0] - 2026-06-24
+
+### Added
+
+- Fixed-camera pitch calibration (Phase 2) for the video analysis page. For a
+  non-panning camera (e.g. a Veo feed) the image-to-pitch homography is set once:
+  grab a frame from the current source, click four known pitch landmarks, and
+  every position projects into true pitch coordinates. New `vision/calibration.py`
+  persists the correspondences (`pitch_calibration.json`) and rebuilds a static
+  `PitchHomography`; a "Use fixed-camera calibration" toggle wires it into both
+  the file and live analysis paths, overriding per-frame pitch detection. Adds
+  the `streamlit-image-coordinates` dependency for click-to-mark.
+
 ## [1.2.0] - 2026-06-24
 
 ### Added

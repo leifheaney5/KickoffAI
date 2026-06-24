@@ -27,6 +27,7 @@ recordings/
 *.mp4
 match_stats*.json
 match_data.vision*.json
+pitch_calibration.json
 runs/
 datasets/
 soccer_frames*/

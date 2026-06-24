@@ -18,6 +18,7 @@ requests>=2.31.0
 # Real-time dashboard
 streamlit>=1.50.0
 streamlit-autorefresh>=1.0.1  # fallback live-refresh for Streamlit < 1.37
+streamlit-image-coordinates>=0.2.0  # click-to-mark fixed-camera pitch calibration
 pandas>=2.0.0
 watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 
