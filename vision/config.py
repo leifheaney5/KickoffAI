@@ -158,6 +158,19 @@ class PipelineConfig:
     # --- Output volume ---------------------------------------------------- #
     max_frames_recorded: int = 0        # 0 = keep every processed frame
 
+    # --- Live source resilience (HLS / RTSP streams, e.g. Veo) ----------- #
+    # A live network feed can stall or drop briefly mid-match. Rather than ending
+    # the session on the first failed read, reconnect and resume from the live
+    # edge so a 90-minute game survives transient network blips.
+    live_reconnect: bool = True
+    live_reconnect_attempts: int = 5      # tries per stall before giving up
+    live_reconnect_backoff: float = 1.0   # base seconds between tries (linear)
+    live_max_reconnects: int = 200        # total reconnects before stopping
+    # FFmpeg options OpenCV passes when opening a network stream: ffmpeg's own
+    # segment-level reconnect plus a read timeout, so a stalled socket retries
+    # instead of hanging forever. Empty -> DEFAULT_FFMPEG_CAPTURE_OPTIONS.
+    ffmpeg_capture_options: str = ""
+
     # --- Visualisation ---------------------------------------------------- #
     show: bool = False                  # cv2.imshow debug overlay
 

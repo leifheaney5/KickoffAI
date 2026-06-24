@@ -23,6 +23,24 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.2.0] - 2026-06-24
+
+### Added
+
+- Live-stream resilience for the video analysis pipeline: a stalled or dropped
+  network feed (e.g. a live Veo HLS `.m3u8`) now reconnects from the live edge
+  instead of ending the session. Adds FFmpeg reconnect/timeout capture options,
+  a low-latency capture buffer, and config knobs (`live_reconnect`,
+  `live_reconnect_attempts`, `live_reconnect_backoff`, `live_max_reconnects`,
+  `ffmpeg_capture_options`). The live view reports recovered stream drops.
+
+### Fixed
+
+- YouTube URL resolution now uses the android/ios player client so the resolved
+  media opens in OpenCV instead of failing with HTTP 403 (web-client URLs are
+  bound to a browser session). High-res YouTube remains gated by Google's
+  PO-token enforcement; a direct HLS feed (Veo) is the recommended source.
+
 ## [1.1.1] - 2026-06-24
 
 - Backfilled prior commits and pushed merges into this changelog with SemVer
