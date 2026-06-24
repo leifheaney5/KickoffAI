@@ -32,10 +32,18 @@ try:
     import cv2
     from vision import MatchAnalyzer, PipelineConfig
     from vision import bridge as vbridge
+    from vision import calibration as vcal
     from vision.pitch import DEFAULT_PITCH_MODEL, PitchDetector
     VISION_OK, VISION_ERR = True, ""
 except Exception as exc:  # pragma: no cover - import guard
     VISION_OK, VISION_ERR = False, str(exc)
+
+# Optional click-to-mark component for fixed-camera pitch calibration.
+try:
+    from streamlit_image_coordinates import streamlit_image_coordinates
+    CLICK_OK = True
+except Exception:
+    CLICK_OK = False
 
 def best_device() -> str:
     """Return the best available torch device: cuda > mps > cpu."""
@@ -584,6 +592,154 @@ with st.expander("Tactical map layers", expanded=False):
             help="Fading polyline of the ball's recent path."),
     }
 
+
+# --------------------------------------------------------------------------- #
+# Fixed-camera pitch calibration (Phase 2). A non-panning camera (e.g. Veo) only
+# needs the image->pitch homography set once: mark known landmarks on a grabbed
+# frame and every position projects into true pitch coordinates from then on.
+# --------------------------------------------------------------------------- #
+CAL_KEY = "kp_cal"
+
+
+def _current_source():
+    """The source value for the active radio selection (file / stream / cam)."""
+    if source_kind == "Video file":
+        return video_path
+    if source_kind == STREAM_SOURCE:
+        return (stream_url or "").strip()
+    return int(cam_index) if cam_index is not None else None
+
+
+def grab_calibration_frame(source):
+    """Open the source and return one BGR frame (warming the stream first)."""
+    from vision.sources import resolve_video_source
+    resolved = resolve_video_source(source)
+    cap = cv2.VideoCapture(resolved.capture_source)
+    try:
+        for _ in range(8):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return frame
+        return None
+    finally:
+        cap.release()
+
+
+saved_cal = vcal.load_calibration()
+with st.expander("Pitch calibration (fixed camera — Veo)", expanded=False):
+    if saved_cal:
+        st.success(f"Calibrated · {len(saved_cal['points'])} points · "
+                   f"saved {saved_cal.get('created', '')}")
+    else:
+        st.caption("Not calibrated — positions use naive image space. Calibrate "
+                   "once for a fixed camera to get true pitch coordinates.")
+
+    if not CLICK_OK:
+        st.warning("Click-to-mark needs the image component: "
+                   "`pip install streamlit-image-coordinates`")
+    else:
+        gc1, gc2 = st.columns(2)
+        if gc1.button("Grab frame from source", use_container_width=True):
+            src = _current_source()
+            if src is None or (isinstance(src, str) and not src):
+                st.error("Pick or enter a source above first.")
+            else:
+                with st.spinner("Grabbing a frame…"):
+                    try:
+                        fr = grab_calibration_frame(src)
+                    except Exception as exc:
+                        fr, _ = None, st.error(f"Could not grab frame: {exc}")
+                if fr is not None:
+                    st.session_state[CAL_KEY + "_frame"] = fr
+                    st.session_state[CAL_KEY + "_clicks"] = []
+                    st.session_state.pop(CAL_KEY + "_last", None)
+                    st.rerun()
+        if gc2.button("Clear saved calibration", use_container_width=True,
+                      disabled=not saved_cal):
+            vcal.clear_calibration()
+            st.session_state[CAL_KEY + "_use"] = False
+            st.toast("Calibration cleared.")
+            st.rerun()
+
+        frame = st.session_state.get(CAL_KEY + "_frame")
+        if frame is not None:
+            orig_h, orig_w = frame.shape[:2]
+            disp_w = min(900, orig_w)
+            f = orig_w / disp_w
+            disp_h = int(orig_h / f)
+            clicks = st.session_state.setdefault(CAL_KEY + "_clicks", [])
+
+            lm_names = list(vcal.LANDMARKS.keys())
+            st.caption("Choose each point's landmark, then click its exact spot "
+                       "on the frame — in order.")
+            slot_cols = st.columns(4)
+            chosen = [
+                slot_cols[i].selectbox(
+                    f"Point {i + 1}", lm_names,
+                    index=lm_names.index(vcal.DEFAULT_LANDMARK_ORDER[i]),
+                    key=CAL_KEY + f"_lm{i}")
+                for i in range(4)
+            ]
+
+            n = len(clicks)
+            if n < 4:
+                st.info(f"Next: click **{chosen[n]}**  ({n}/4 marked)")
+            else:
+                st.success("All 4 points marked — review, then Save.")
+
+            disp = cv2.cvtColor(cv2.resize(frame, (disp_w, disp_h)),
+                                cv2.COLOR_BGR2RGB)
+            for i, (px, py) in enumerate(clicks):
+                dx, dy = int(px / f), int(py / f)
+                cv2.circle(disp, (dx, dy), 6, (255, 60, 110), 2)
+                cv2.putText(disp, str(i + 1), (dx + 8, dy - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 60, 110), 2)
+
+            val = streamlit_image_coordinates(disp, key=CAL_KEY + "_img")
+            if val is not None and len(clicks) < 4:
+                cur = (val["x"], val["y"])
+                if cur != st.session_state.get(CAL_KEY + "_last"):
+                    st.session_state[CAL_KEY + "_last"] = cur
+                    clicks.append([cur[0] * f, cur[1] * f])  # store full-res px
+                    st.rerun()
+
+            bc = st.columns(3)
+            if bc[0].button("Undo last", disabled=not clicks,
+                            use_container_width=True):
+                clicks.pop()
+                st.rerun()
+            if bc[1].button("Reset points", disabled=not clicks,
+                            use_container_width=True):
+                st.session_state[CAL_KEY + "_clicks"] = []
+                st.rerun()
+            if bc[2].button("Save calibration", type="primary",
+                            disabled=len(clicks) < 4, use_container_width=True):
+                points = [{"label": chosen[i],
+                           "norm": list(vcal.LANDMARKS[chosen[i]]),
+                           "px": clicks[i]} for i in range(4)]
+                try:
+                    vcal.save_calibration(points, frame_size=(orig_w, orig_h),
+                                          source=str(_current_source()))
+                    st.session_state[CAL_KEY + "_use"] = True
+                    st.toast("Calibration saved.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not save: {exc}")
+
+use_calibration = st.checkbox(
+    "Use fixed-camera calibration for analysis",
+    value=st.session_state.get(CAL_KEY + "_use", bool(saved_cal)),
+    disabled=not saved_cal,
+    help="Project positions through the saved 4-point homography instead of "
+         "naive image space. Overrides per-frame pitch homography.")
+st.session_state[CAL_KEY + "_use"] = use_calibration
+cal_homography = None
+if use_calibration and saved_cal:
+    try:
+        cal_homography = vcal.homography_from_calibration(saved_cal)
+    except Exception as exc:
+        st.warning(f"Calibration unusable ({exc}); using image space.")
+
 st.divider()
 
 
@@ -612,6 +768,16 @@ def make_pitch_detector(cfg):
             if (use_pitch and backend.startswith("Roboflow")) else None)
 
 
+def make_analyzer(cfg):
+    """Build a MatchAnalyzer wired with the fixed-camera homography if calibrated.
+
+    A static calibration and the per-frame pitch detector are mutually exclusive
+    (the detector overwrites the homography each frame), so calibration wins.
+    """
+    pd = None if cal_homography is not None else make_pitch_detector(cfg)
+    return MatchAnalyzer(cfg, homography=cal_homography, pitch_detector=pd)
+
+
 def feed_passes_to_dashboard(stats):
     """Stream detected passes into the dashboard event log (idempotent)."""
     if feed_dashboard and stats.passes:
@@ -635,7 +801,7 @@ if source_kind == "Video file":
             st.stop()
 
         cfg = build_config()
-        analyzer = MatchAnalyzer(cfg, pitch_detector=make_pitch_detector(cfg))
+        analyzer = make_analyzer(cfg)
         ph = make_placeholders()
         prog = st.progress(0.0, text="Starting…")
         counters = {"proc": 0, "ball": 0}
@@ -719,7 +885,7 @@ else:
             live_label = f"camera #{cam_index}"
         cfg = build_config()
         try:
-            analyzer = MatchAnalyzer(cfg, pitch_detector=make_pitch_detector(cfg))
+            analyzer = make_analyzer(cfg)
             with st.spinner(f"Opening {live_label}..."):
                 analyzer.open(live_source)
         except Exception as exc:
