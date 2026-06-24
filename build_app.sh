@@ -66,8 +66,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>      <string>${EXEC_NAME}</string>
   <key>CFBundleIconFile</key>        <string>${EXEC_NAME}</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
-  <key>CFBundleVersion</key>         <string>1.6.0</string>
-  <key>CFBundleShortVersionString</key><string>1.6.0</string>
+  <key>CFBundleVersion</key>         <string>1.7.0</string>
+  <key>CFBundleShortVersionString</key><string>1.7.0</string>
   <key>LSMinimumSystemVersion</key>  <string>11.0</string>
   <key>NSHighResolutionCapable</key> <true/>
   <key>NSMicrophoneUsageDescription</key>
@@ -116,9 +116,16 @@ if command -v ollama >/dev/null 2>&1 && \
   sleep 3
 fi
 
-# Match library: use Docker Postgres if it's up, else SQLite (db.py default).
+# Match library: live app launches should use Postgres. SQLite is still
+# available for development, but must be explicit to avoid split libraries.
 if [ -z "\${KICKOFF_DB_URL:-}" ] && (: < /dev/tcp/localhost/5432) 2>/dev/null; then
   export KICKOFF_DB_URL="postgresql+psycopg://kickoff:kickoff@localhost:5432/kickoff"
+fi
+if [ -z "\${KICKOFF_DB_URL:-}" ] && [ "\${KICKOFF_ALLOW_SQLITE:-0}" != "1" ]; then
+  echo "[launcher] Kickoff Postgres is not reachable on localhost:5432."
+  echo "[launcher] Start it with: docker compose up -d"
+  echo "[launcher] For dev-only SQLite, set KICKOFF_ALLOW_SQLITE=1."
+  exit 1
 fi
 
 # The venv's Python is a universal2 binary, and a *script*-based .app bundle

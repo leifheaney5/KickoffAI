@@ -23,6 +23,26 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.7.0] - 2026-06-24
+
+### Changed
+
+- Audio ingest now runs capture and processing on separate threads. A bounded
+  hand-off queue (`KICKOFF_AUDIO_QUEUE_MAX`, default 8) lets the microphone keep
+  recording while Whisper transcription and Ollama parsing run, so fast
+  back-to-back play-by-play is no longer dropped while a prior phrase is still
+  being processed. When the worker falls behind, the oldest queued clip is
+  dropped rather than blocking capture.
+- Transcription now runs in memory: captured audio is converted to a 16 kHz mono
+  float32 array and fed straight to Whisper, removing the per-phrase temp-WAV
+  write/read/unlink (falls back to a temp WAV if numpy is unavailable).
+
+### Added
+
+- Live status now reports `queued` and `dropped` clip counts; the dashboard
+  status bar shows a "Backlog" chip only when the worker is behind.
+- Microphone error state is surfaced in `status.json` (`mic_error`).
+
 ## [1.6.0] - 2026-06-24
 
 ### Added

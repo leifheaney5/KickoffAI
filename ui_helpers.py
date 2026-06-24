@@ -283,6 +283,21 @@ def render_status_chips():
     events_n = status.get("events", len(S.load_events()))
     heard = status.get("last_heard") or "—"
 
+    # Only surface the processing backlog when there is one — keeps the bar clean
+    # in the common case where the worker is keeping up with capture.
+    queued = status.get("queued", 0)
+    dropped = status.get("dropped", 0)
+    backlog_chip = ""
+    if active and (queued or dropped):
+        parts = []
+        if queued:
+            parts.append(f"{queued} queued")
+        if dropped:
+            parts.append(f"{dropped} dropped")
+        backlog_chip = (
+            f"<div class='kp-chip'><span class='l'>Backlog</span>"
+            f"<span class='v'>{' · '.join(parts)}</span></div>")
+
     st.markdown(
         f"<div class='kp-status'>"
         f"<div class='kp-chip'>{mic_svg(active)}<span class='dot {dot}'></span>"
@@ -293,6 +308,7 @@ def render_status_chips():
         f"<span class='v mono'>{session}</span></div>"
         f"<div class='kp-chip'><span class='l'>Events</span>"
         f"<span class='v'>{events_n}</span></div>"
+        f"{backlog_chip}"
         f"<div class='kp-chip heard'><span class='l'>Heard</span>"
         f"<span class='kp-heard'>{heard}</span></div>"
         f"</div>",

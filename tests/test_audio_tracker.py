@@ -1,9 +1,60 @@
 import json
 
+import numpy as np
 import pytest
 import requests
 
 import audio_tracker as A
+
+
+class _FakeAudio:
+    """Minimal stand-in for SpeechRecognition AudioData."""
+
+    def __init__(self, samples_int16):
+        self._raw = np.asarray(samples_int16, dtype=np.int16).tobytes()
+        self.sample_rate = 16000
+        self.sample_width = 2
+
+    def get_raw_data(self, convert_rate=None, convert_width=None):
+        return self._raw
+
+
+class _RecordingTranscriber:
+    def __init__(self):
+        self.received = None
+
+    def transcribe(self, audio):
+        self.received = audio
+        return "home corner", []
+
+
+def test_audio_to_samples_returns_normalised_float32():
+    samples = A.audio_to_samples(_FakeAudio([0, 16384, -16384]))
+
+    assert samples.dtype == np.float32
+    assert samples[0] == pytest.approx(0.0)
+    assert samples[1] == pytest.approx(0.5, abs=1e-4)
+    assert samples[2] == pytest.approx(-0.5, abs=1e-4)
+
+
+def test_transcribe_audio_uses_in_memory_array():
+    rec = _RecordingTranscriber()
+
+    text, _segments = A.transcribe_audio(rec, _FakeAudio([1, 2, 3]))
+
+    assert text == "home corner"
+    assert isinstance(rec.received, np.ndarray)  # no temp WAV path
+
+
+def test_transcribe_audio_falls_back_to_wav_path(monkeypatch):
+    monkeypatch.setattr(A, "audio_to_samples", lambda audio: None)
+    monkeypatch.setattr(A, "write_wav", lambda audio, path: None)
+    rec = _RecordingTranscriber()
+
+    text, _segments = A.transcribe_audio(rec, _FakeAudio([1, 2, 3]))
+
+    assert text == "home corner"
+    assert isinstance(rec.received, str) and rec.received.endswith(".wav")
 
 
 def test_apply_corrections_repairs_soccer_homophones_and_numbers():

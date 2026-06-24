@@ -16,9 +16,9 @@ Affected files: `audio_tracker.py`, `audio_ingest.py`, `audio_benchmark.py`,
 
 ---
 
-## Phase 1 — Threaded capture (no more dropped audio)
+## Phase 1 — Threaded capture (no more dropped audio) ✓ DONE
 
-**Branch:** `feature/audio-threaded-capture` · **Size:** M · No blockers
+**Branch:** `feature/audio-threaded-capture` · **Size:** M · No blockers · Shipped in v1.7.0
 
 The headline issue. The main loop ([audio_tracker.py:891-1058](audio_tracker.py#L891-L1058))
 runs `listen()` → `transcribe()` → `parse_event()` synchronously, so while
@@ -49,9 +49,9 @@ first is still transcribing) logs **both** events; `status.json` exposes a
 
 ---
 
-## Phase 2 — In-memory transcription (cut per-phrase I/O)
+## Phase 2 — In-memory transcription (cut per-phrase I/O) ✓ DONE
 
-**Branch:** `feature/audio-inmemory-transcribe` · **Size:** S · Pairs with Phase 1
+**Branch:** `feature/audio-inmemory-transcribe` · **Size:** S · Shipped in v1.7.0
 
 Every utterance is written to a temp `.wav`, transcribed from that path, then
 unlinked ([audio_tracker.py:913-922](audio_tracker.py#L913-L922)). Both Whisper

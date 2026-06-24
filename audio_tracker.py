@@ -15,10 +15,12 @@ Or let kickoff.sh manage it as a background process.
 
 import json
 import os
+import queue
 import re
 import signal
 import sys
 import tempfile
+import threading
 import time
 import wave
 import audioop
@@ -45,6 +47,11 @@ OLLAMA_TIMEOUT = float(os.environ.get("OLLAMA_TIMEOUT", "15"))
 # seconds — e.g. a commentator shouting "goal, goal!" or two adjacent windows
 # hearing the same call. Set to 0 to disable.
 DEDUPE_SEC = float(os.environ.get("KICKOFF_DEDUPE_SEC", "6"))
+
+# Capture and processing run on separate threads so slow transcription/parsing
+# never blocks the microphone. This bounds the hand-off queue; when the worker
+# falls behind, the oldest clip is dropped rather than letting capture block.
+AUDIO_QUEUE_MAX = int(os.environ.get("KICKOFF_AUDIO_QUEUE_MAX", "8"))
 
 # Whisper model size. "medium.en" favors accurate short soccer commands over
 # minimum latency. Override WHISPER_MODEL / WHISPER_MLX_MODEL for speed tests.
@@ -310,16 +317,21 @@ class Transcriber:
         compression_ratio_threshold=2.4,
     )
 
-    def transcribe(self, wav_path: str):
-        """Return (text, segments) for a WAV file. Text may be empty."""
+    def transcribe(self, audio):
+        """Return (text, segments) for ``audio``. Text may be empty.
+
+        ``audio`` is either a WAV file path or a 16 kHz mono float32 numpy array
+        (both Whisper backends accept either), so the live loop can transcribe
+        straight from memory without a temp WAV round-trip.
+        """
         try:
             if self.backend == "mlx-whisper":
                 result = self._mlx.transcribe(
-                    wav_path, path_or_hf_repo=WHISPER_MLX_MODEL, **self._OPTS
+                    audio, path_or_hf_repo=WHISPER_MLX_MODEL, **self._OPTS
                 )
             else:
                 result = self._openai_model.transcribe(
-                    wav_path, fp16=False, **self._OPTS
+                    audio, fp16=False, **self._OPTS
                 )
             return (result.get("text") or "").strip(), result.get("segments") or []
         except Exception as exc:
@@ -715,6 +727,40 @@ def write_wav(audio, path: str) -> None:
         wf.writeframes(audio.get_raw_data())
 
 
+def audio_to_samples(audio):
+    """Convert AudioData to a 16 kHz mono float32 array, or None if unavailable.
+
+    Whisper wants 16 kHz mono float32 in [-1, 1]; SpeechRecognition can resample
+    and re-width the raw PCM for us. Returns None when numpy is missing so the
+    caller can fall back to the WAV-file path.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        raw = audio.get_raw_data(convert_rate=16000, convert_width=2)
+        return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    except Exception:
+        return None
+
+
+def transcribe_audio(transcriber, audio):
+    """Transcribe AudioData in memory, falling back to a temp WAV if needed."""
+    samples = audio_to_samples(audio)
+    if samples is not None:
+        return transcriber.transcribe(samples)
+    tmp_wav = None
+    try:
+        fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        write_wav(audio, tmp_wav)
+        return transcriber.transcribe(tmp_wav)
+    finally:
+        if tmp_wav and os.path.exists(tmp_wav):
+            os.remove(tmp_wav)
+
+
 def audio_energy(audio):
     try:
         return int(audioop.rms(audio.frame_data, audio.sample_width))
@@ -844,6 +890,9 @@ def main():
 
     # Live status shared with the dashboard's recording indicator.
     now = time.time()
+    # Every key both threads might write is pre-created so later assignments only
+    # replace values (never resize the dict) — the publish lock then makes each
+    # serialized snapshot consistent.
     status = {
         "session_start": now,
         "recording": True,
@@ -856,174 +905,292 @@ def main():
         "last_ignored_reason": None,
         "last_energy": None,
         "energy_threshold": None,
+        "noise_gate": control.DEFAULT_NOISE_GATE,
         "events": len(load_events()),
+        "notes": len(control.load_notes()),
         "backend": transcriber.backend,
         "chunking": initial_chunking,
+        "calibration_test": None,
+        "mic_error": None,
+        "queued": 0,
+        "dropped": 0,
     }
     control.save_status(status)
 
-    paused_notice = False
-    last_gate = None
-    mic_failures = 0  # consecutive mic read errors; re-open the device after a few
-    last_event_sig = None  # (action, team, player) of the last logged event
-    last_event_sig_time = 0.0
-    while running["flag"]:
-        ctrl = control.load_control()
-        chunk_cfg = chunking_config(ctrl)
-        recognizer.pause_threshold = chunk_cfg["pause_threshold"]
-        recognizer.non_speaking_duration = chunk_cfg["post_speech_padding"]
-        status["chunking"] = chunk_cfg
+    # Capture and processing run on separate threads. The capture thread only
+    # records phrases and hands them to a bounded queue, so a slow transcription
+    # or Ollama parse can never block the microphone and drop live play-by-play.
+    # A lock serialises status.json writes so the two threads can't interleave a
+    # half-updated snapshot.
+    status_lock = threading.Lock()
+    audio_q = queue.Queue(maxsize=AUDIO_QUEUE_MAX)
 
-        # Apply the live "background block-out" slider (unless a fixed env
-        # threshold is pinned). Updating energy_threshold takes effect on the
-        # next listen(), so dragging the slider changes sensitivity instantly.
-        if ENERGY_THRESHOLD is None:
-            gate = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
-            if gate != last_gate:
-                recognizer.energy_threshold = control.gate_to_threshold(gate)
-                print(f"[ear] block-out set to {gate}/100 -> energy threshold "
-                      f"{recognizer.energy_threshold:.0f}", flush=True)
-                last_gate = gate
-        status["energy_threshold"] = recognizer.energy_threshold
-        status["noise_gate"] = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
+    def publish_status():
+        with status_lock:
+            control.save_status(status)
 
-        # Honour a pause requested from the dashboard: stop logging events.
-        if ctrl.get("paused"):
-            if not paused_notice:
-                print("[ear] recording paused (resume from the dashboard)",
-                      flush=True)
-                paused_notice = True
-                # Bank the active recording time once, on the pause transition.
-                if status["recording"] and status["rec_since"]:
-                    status["rec_accum"] += time.time() - status["rec_since"]
-                status["recording"] = False
-                status["rec_since"] = None
-            control.save_status(status)  # keep "updated" fresh while paused
-            time.sleep(0.4)
-            continue
-        if paused_notice:
-            print("[ear] recording resumed", flush=True)
-            paused_notice = False
-            status["recording"] = True
-            status["rec_since"] = time.time()
+    # ----------------------------------------------------------------------- #
+    # Producer — capture phrases and enqueue them; never touches the ML path.
+    # ----------------------------------------------------------------------- #
+    def capture_loop():
+        nonlocal mic
+        paused_notice = False
+        last_gate = None
+        mic_failures = 0  # consecutive read errors; re-open the device after a few
+        while running["flag"]:
+            ctrl = control.load_control()
+            chunk_cfg = chunking_config(ctrl)
+            recognizer.pause_threshold = chunk_cfg["pause_threshold"]
+            recognizer.non_speaking_duration = chunk_cfg["post_speech_padding"]
+            status["chunking"] = chunk_cfg
 
-        control.save_status(status)  # heartbeat each active cycle
+            # Apply the live "background block-out" slider (unless a fixed env
+            # threshold is pinned). Updating energy_threshold takes effect on the
+            # next listen(), so dragging the slider changes sensitivity instantly.
+            if ENERGY_THRESHOLD is None:
+                gate = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
+                if gate != last_gate:
+                    recognizer.energy_threshold = control.gate_to_threshold(gate)
+                    print(f"[ear] block-out set to {gate}/100 -> energy threshold "
+                          f"{recognizer.energy_threshold:.0f}", flush=True)
+                    last_gate = gate
+            status["energy_threshold"] = recognizer.energy_threshold
+            status["noise_gate"] = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
 
-        # Capture one phrase.
-        try:
-            with mic as source:
-                audio = recognizer.listen(
-                    source, timeout=2,
-                    phrase_time_limit=chunk_cfg["phrase_time_limit"]
-                )
-        except sr.WaitTimeoutError:
-            mic_failures = 0
-            continue  # no speech in this window; keep listening
-        except OSError as exc:
-            mic_failures += 1
-            print(f"[ear] microphone read error ({mic_failures}): {exc}",
-                  flush=True)
-            # A dropped/reconnected device (e.g. AirPods) often returns at a new
-            # index; re-resolve KICKOFF_MIC instead of retrying the stale handle.
-            if mic_failures >= 3:
-                try:
-                    mic = pick_microphone(sr)
-                    print("[ear] re-opened microphone after repeated errors",
+            # Honour a pause requested from the dashboard: stop capturing.
+            if ctrl.get("paused"):
+                if not paused_notice:
+                    print("[ear] recording paused (resume from the dashboard)",
                           flush=True)
-                    mic_failures = 0
-                except OSError as reopen_exc:
-                    print(f"[ear] mic re-open failed: {reopen_exc}", flush=True)
-            time.sleep(0.5)
-            continue
-        mic_failures = 0
+                    paused_notice = True
+                    # Bank the active recording time once, on the pause transition.
+                    if status["recording"] and status["rec_since"]:
+                        status["rec_accum"] += time.time() - status["rec_since"]
+                    status["recording"] = False
+                    status["rec_since"] = None
+                publish_status()  # keep "updated" fresh while paused
+                time.sleep(0.4)
+                continue
+            if paused_notice:
+                print("[ear] recording resumed", flush=True)
+                paused_notice = False
+                status["recording"] = True
+                status["rec_since"] = time.time()
 
-        # Drop sub-threshold blips (a cough, a door) before paying for Whisper.
-        duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
-        energy = audio_energy(audio)
-        status["last_energy"] = energy
-        if duration < chunk_cfg["min_phrase_sec"]:
-            status["last_ignored_reason"] = f"audio too short {duration:.2f}s"
-            control.save_status(status)
-            continue
+            publish_status()  # heartbeat each active cycle
 
-        # Transcribe via a temp WAV file.
-        started = time.perf_counter()
-        tmp_wav = None
-        try:
-            fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
-            os.close(fd)
-            write_wav(audio, tmp_wav)
-            raw_text, segments = transcriber.transcribe(tmp_wav)
-        finally:
-            if tmp_wav and os.path.exists(tmp_wav):
-                os.remove(tmp_wav)
+            # Capture one phrase.
+            try:
+                with mic as source:
+                    audio = recognizer.listen(
+                        source, timeout=2,
+                        phrase_time_limit=chunk_cfg["phrase_time_limit"]
+                    )
+            except sr.WaitTimeoutError:
+                mic_failures = 0
+                continue  # no speech in this window; keep listening
+            except OSError as exc:
+                mic_failures += 1
+                print(f"[ear] microphone read error ({mic_failures}): {exc}",
+                      flush=True)
+                status["mic_error"] = str(exc)
+                # A dropped/reconnected device (e.g. AirPods) often returns at a
+                # new index; re-resolve KICKOFF_MIC instead of retrying a stale
+                # handle.
+                if mic_failures >= 3:
+                    try:
+                        mic = pick_microphone(sr)
+                        print("[ear] re-opened microphone after repeated errors",
+                              flush=True)
+                        mic_failures = 0
+                        status["mic_error"] = None
+                    except OSError as reopen_exc:
+                        print(f"[ear] mic re-open failed: {reopen_exc}", flush=True)
+                publish_status()
+                time.sleep(0.5)
+                continue
+            mic_failures = 0
+            status["mic_error"] = None
 
-        # Repair common mishearings (Home/Away side names) before anything else.
-        text = apply_corrections(raw_text)
+            # Drop sub-threshold blips (a cough, a door) before paying for Whisper.
+            duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
+            energy = audio_energy(audio)
+            status["last_energy"] = energy
+            if duration < chunk_cfg["min_phrase_sec"]:
+                status["last_ignored_reason"] = f"audio too short {duration:.2f}s"
+                publish_status()
+                continue
 
-        # Stamp the current match-clock reading so reviews/feed/report can show it.
-        ctrl = control.load_control()
-        main_clk, added, _half = control.clock_label(ctrl["timer"])
-        match_time = f"{main_clk}{(' ' + added) if added else ''}"
+            # Hand off for processing. If the worker is behind, drop the OLDEST
+            # clip so capture never blocks and the backlog can't grow unbounded.
+            item = (audio, energy)
+            try:
+                audio_q.put_nowait(item)
+            except queue.Full:
+                try:
+                    audio_q.get_nowait()
+                    status["dropped"] = status.get("dropped", 0) + 1
+                    print("[ear] processing backlog; dropped the oldest clip",
+                          flush=True)
+                except queue.Empty:
+                    pass
+                try:
+                    audio_q.put_nowait(item)
+                except queue.Full:
+                    pass
+            status["queued"] = audio_q.qsize()
+            publish_status()
+        print("[ear] capture stopped.", flush=True)
 
-        # Only log confident, speech-like transcripts — this is what keeps
-        # background noise and Whisper hallucinations out of the match log.
-        ok, reason = is_real_speech(text, segments)
+    # ----------------------------------------------------------------------- #
+    # Consumer — drain the queue: transcribe, gate, parse, persist.
+    # ----------------------------------------------------------------------- #
+    def process_loop():
+        last_event_sig = None  # (action, team, player) of the last logged event
+        last_event_sig_time = 0.0
+        # Keep draining whatever is queued even after a stop is requested.
+        while running["flag"] or not audio_q.empty():
+            try:
+                audio, energy = audio_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            status["queued"] = audio_q.qsize()
 
-        # Calibration test mode consumes exactly one phrase and never logs it as
-        # a match event. It lets the dashboard show the whole ingest pipeline.
-        cal = ctrl.get("calibration_test") or {}
-        if cal.get("armed"):
-            event, parser_source = ({}, "none")
-            if ok:
-                event, parser_source = parse_event(
-                    text, lineups=ctrl.get("lineups"), return_source=True)
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            result = {
-                "armed": False,
-                "requested_at": cal.get("requested_at"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "ok": ok,
-                "reason": reason,
-                "raw_text": raw_text,
-                "corrected_text": text,
-                "suggested_text": audio_ingest.suggested_text(event),
-                "parsed_event": event,
-                "parser_source": parser_source,
-                "energy": energy,
-                "energy_threshold": recognizer.energy_threshold,
-                "latency_ms": latency_ms,
-            }
-            status["calibration_test"] = result
-            ctrl["calibration_test"] = {
-                "armed": False,
-                "requested_at": cal.get("requested_at"),
-                "last_result_at": result["timestamp"],
-            }
-            control.save_control(ctrl)
-            write_review(
-                timestamp=result["timestamp"],
-                match_time=match_time,
-                event_timestamp=None,
-                audio=audio,
-                raw_text=raw_text,
-                corrected_text=text,
-                event=event,
-                status="calibration",
-                reason=reason,
-                latency_ms=latency_ms,
-            )
-            status["last_heard"] = text[:140] if text else None
+            # Transcribe straight from memory (no temp WAV round-trip).
+            started = time.perf_counter()
+            raw_text, segments = transcribe_audio(transcriber, audio)
+
+            # Repair common mishearings (Home/Away side names) before anything else.
+            text = apply_corrections(raw_text)
+
+            # Stamp the current match-clock reading for reviews/feed/report.
+            ctrl = control.load_control()
+            main_clk, added, _half = control.clock_label(ctrl["timer"])
+            match_time = f"{main_clk}{(' ' + added) if added else ''}"
+
+            # Only log confident, speech-like transcripts — this is what keeps
+            # background noise and Whisper hallucinations out of the match log.
+            ok, reason = is_real_speech(text, segments)
+
+            # Calibration test mode consumes exactly one phrase and never logs it
+            # as a match event. It lets the dashboard show the whole pipeline.
+            cal = ctrl.get("calibration_test") or {}
+            if cal.get("armed"):
+                event, parser_source = ({}, "none")
+                if ok:
+                    event, parser_source = parse_event(
+                        text, lineups=ctrl.get("lineups"), return_source=True)
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                result = {
+                    "armed": False,
+                    "requested_at": cal.get("requested_at"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "ok": ok,
+                    "reason": reason,
+                    "raw_text": raw_text,
+                    "corrected_text": text,
+                    "suggested_text": audio_ingest.suggested_text(event),
+                    "parsed_event": event,
+                    "parser_source": parser_source,
+                    "energy": energy,
+                    "energy_threshold": recognizer.energy_threshold,
+                    "latency_ms": latency_ms,
+                }
+                status["calibration_test"] = result
+                ctrl["calibration_test"] = {
+                    "armed": False,
+                    "requested_at": cal.get("requested_at"),
+                    "last_result_at": result["timestamp"],
+                }
+                control.save_control(ctrl)
+                write_review(
+                    timestamp=result["timestamp"],
+                    match_time=match_time,
+                    event_timestamp=None,
+                    audio=audio,
+                    raw_text=raw_text,
+                    corrected_text=text,
+                    event=event,
+                    status="calibration",
+                    reason=reason,
+                    latency_ms=latency_ms,
+                )
+                status["last_heard"] = text[:140] if text else None
+                status["last_raw_heard"] = raw_text[:140] if raw_text else None
+                status["last_corrected_heard"] = text[:140] if text else None
+                status["last_ignored_reason"] = None if ok else reason
+                publish_status()
+                print(f"[calibration] {reason}: {text!r}", flush=True)
+                continue
+
+            if not ok:
+                if text:
+                    print(f"[ear] ignored ({reason}): {text[:60]!r}", flush=True)
+                    write_review(
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        match_time=match_time,
+                        event_timestamp=None,
+                        audio=audio,
+                        raw_text=raw_text,
+                        corrected_text=text,
+                        event=None,
+                        status="ignored",
+                        reason=reason,
+                        latency_ms=int((time.perf_counter() - started) * 1000),
+                    )
+                status["last_heard"] = text[:140] if text else None
+                status["last_raw_heard"] = raw_text[:140] if raw_text else None
+                status["last_corrected_heard"] = text[:140] if text else None
+                status["last_ignored_reason"] = reason
+                publish_status()
+                continue
+
+            # Thoughts mode: capture the phrase as a free-form note, not an event,
+            # and keep its audio clip for playback under Match Insights.
+            if ctrl.get("thoughts_mode"):
+                now_utc = datetime.now(timezone.utc)
+                audio_rel = None
+                try:
+                    os.makedirs(control.NOTES_AUDIO_DIR, exist_ok=True)
+                    audio_rel = os.path.join(
+                        control.NOTES_AUDIO_DIR,
+                        f"note_{now_utc.strftime('%Y%m%d_%H%M%S_%f')}.wav")
+                    write_wav(audio, audio_rel)
+                except Exception as exc:
+                    print(f"[note] could not save audio: {exc}", flush=True)
+                    audio_rel = None
+                note = {
+                    "timestamp": now_utc.isoformat(),
+                    "match_time": match_time,
+                    "text": text,
+                    "audio": audio_rel,
+                }
+                control.append_note(note)
+                status["last_heard"] = text[:140]
+                status["notes"] = len(control.load_notes())
+                publish_status()
+                print(f"[note] saved: {text!r}", flush=True)
+                continue
+
+            print(f"[ear] heard: {text!r}", flush=True)
+            status["last_heard"] = text[:140]
             status["last_raw_heard"] = raw_text[:140] if raw_text else None
-            status["last_corrected_heard"] = text[:140] if text else None
-            status["last_ignored_reason"] = None if ok else reason
-            control.save_status(status)
-            print(f"[calibration] {reason}: {text!r}", flush=True)
-            continue
+            status["last_corrected_heard"] = text[:140]
+            status["last_ignored_reason"] = None
+            publish_status()
 
-        if not ok:
-            if text:
-                print(f"[ear] ignored ({reason}): {text[:60]!r}", flush=True)
+            event, parser_source = parse_event(
+                text, lineups=ctrl.get("lineups"), return_source=True)
+
+            # Drop an identical event repeated within the cooldown (e.g. "goal,
+            # goal!" or two windows hearing the same call). Only de-dupe events
+            # that actually carry an action, and keep the suppression reviewable.
+            sig = ((event or {}).get("action"), (event or {}).get("team"),
+                   (event or {}).get("player"))
+            now_mono = time.monotonic()
+            if (DEDUPE_SEC > 0 and sig[0] and sig == last_event_sig
+                    and now_mono - last_event_sig_time < DEDUPE_SEC):
+                print(f"[ear] ignored (duplicate): {text[:60]!r}", flush=True)
                 write_review(
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     match_time=match_time,
@@ -1031,122 +1198,67 @@ def main():
                     audio=audio,
                     raw_text=raw_text,
                     corrected_text=text,
-                    event=None,
+                    event=event,
                     status="ignored",
-                    reason=reason,
+                    reason="duplicate",
                     latency_ms=int((time.perf_counter() - started) * 1000),
                 )
-            status["last_heard"] = text[:140] if text else None
-            status["last_raw_heard"] = raw_text[:140] if raw_text else None
-            status["last_corrected_heard"] = text[:140] if text else None
-            status["last_ignored_reason"] = reason
-            control.save_status(status)
-            continue
+                status["last_ignored_reason"] = "duplicate"
+                last_event_sig_time = now_mono  # extend the window on repeats
+                publish_status()
+                continue
+            last_event_sig = sig
+            last_event_sig_time = now_mono
 
-        # Thoughts mode: capture the phrase as a free-form note, not an event,
-        # and keep its audio clip so it can be played back under Match Insights.
-        if ctrl.get("thoughts_mode"):
-            now_utc = datetime.now(timezone.utc)
-            audio_rel = None
-            try:
-                os.makedirs(control.NOTES_AUDIO_DIR, exist_ok=True)
-                audio_rel = os.path.join(
-                    control.NOTES_AUDIO_DIR,
-                    f"note_{now_utc.strftime('%Y%m%d_%H%M%S_%f')}.wav")
-                write_wav(audio, audio_rel)
-            except Exception as exc:
-                print(f"[note] could not save audio: {exc}", flush=True)
-                audio_rel = None
-            note = {
-                "timestamp": now_utc.isoformat(),
+            event_timestamp = datetime.now(timezone.utc).isoformat()
+            record = {
+                "timestamp": event_timestamp,
                 "match_time": match_time,
-                "text": text,
-                "audio": audio_rel,
+                "raw_text": raw_text,
+                "corrected_text": text,
+                "parser_source": parser_source,
+                "status": "pending",
+                **(event or {
+                    "team": None, "player": None, "action": None,
+                    "result": None, "location": None,
+                }),
             }
-            control.append_note(note)
-            status["last_heard"] = text[:140]
-            status["notes"] = len(control.load_notes())
-            control.save_status(status)
-            print(f"[note] saved: {text!r}", flush=True)
-            continue
-
-        print(f"[ear] heard: {text!r}", flush=True)
-        status["last_heard"] = text[:140]
-        status["last_raw_heard"] = raw_text[:140] if raw_text else None
-        status["last_corrected_heard"] = text[:140]
-        status["last_ignored_reason"] = None
-        control.save_status(status)
-
-        event, parser_source = parse_event(
-            text, lineups=ctrl.get("lineups"), return_source=True)
-
-        # Drop an identical event repeated within the cooldown (e.g. "goal,
-        # goal!" or two windows hearing the same call). Only de-dupe events that
-        # actually carry an action, and keep the suppression reviewable.
-        sig = ((event or {}).get("action"), (event or {}).get("team"),
-               (event or {}).get("player"))
-        now_mono = time.monotonic()
-        if (DEDUPE_SEC > 0 and sig[0] and sig == last_event_sig
-                and now_mono - last_event_sig_time < DEDUPE_SEC):
-            print(f"[ear] ignored (duplicate): {text[:60]!r}", flush=True)
+            append_event(record)
             write_review(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 match_time=match_time,
-                event_timestamp=None,
+                event_timestamp=event_timestamp,
                 audio=audio,
                 raw_text=raw_text,
                 corrected_text=text,
-                event=event,
-                status="ignored",
-                reason="duplicate",
+                event={k: record.get(k) for k in (
+                    "team", "player", "action", "result", "location")},
+                status="pending",
+                reason=parser_source,
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
-            status["last_ignored_reason"] = "duplicate"
-            last_event_sig_time = now_mono  # extend the window on repeats
-            control.save_status(status)
-            continue
-        last_event_sig = sig
-        last_event_sig_time = now_mono
+            status["last_event"] = record["timestamp"]
+            status["events"] = status.get("events", 0) + 1
+            publish_status()
+            print(f"[brain] logged: {json.dumps({k: record[k] for k in ('team','action','result')})}",
+                  flush=True)
+        print("[ear] processing stopped.", flush=True)
 
-        event_timestamp = datetime.now(timezone.utc).isoformat()
-        record = {
-            "timestamp": event_timestamp,
-            "match_time": match_time,
-            "raw_text": raw_text,
-            "corrected_text": text,
-            "parser_source": parser_source,
-            "status": "pending",
-            **(event or {
-                "team": None, "player": None, "action": None,
-                "result": None, "location": None,
-            }),
-        }
-        append_event(record)
-        write_review(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            match_time=match_time,
-            event_timestamp=event_timestamp,
-            audio=audio,
-            raw_text=raw_text,
-            corrected_text=text,
-            event={k: record.get(k) for k in (
-                "team", "player", "action", "result", "location")},
-            status="pending",
-            reason=parser_source,
-            latency_ms=int((time.perf_counter() - started) * 1000),
-        )
-        status["last_event"] = record["timestamp"]
-        status["events"] = status.get("events", 0) + 1
-        control.save_status(status)
-        print(f"[brain] logged: {json.dumps({k: record[k] for k in ('team','action','result')})}",
-              flush=True)
+    capture_thread = threading.Thread(
+        target=capture_loop, name="kickoff-capture", daemon=True)
+    capture_thread.start()
+    try:
+        process_loop()  # runs on the main thread so SIGINT lands here
+    finally:
+        running["flag"] = False
+        capture_thread.join(timeout=5)
 
     # Mark the recording stopped on a clean shutdown.
     if status["recording"] and status["rec_since"]:
         status["rec_accum"] += time.time() - status["rec_since"]
     status["recording"] = False
     status["rec_since"] = None
-    control.save_status(status)
+    publish_status()
     print("[ear] stopped cleanly.", flush=True)
 
 
