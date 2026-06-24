@@ -90,6 +90,10 @@ def resolve_youtube_source(url: str) -> ResolvedVideoSource:
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
+        # YouTube's default "web" client now returns media URLs that 403 for any
+        # non-browser fetch (OpenCV/FFmpeg). The android/ios clients hand back
+        # URLs that open directly, so prefer them with web as a last resort.
+        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:

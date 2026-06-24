@@ -745,7 +745,10 @@ else:
             resolved.title if resolved is not None and resolved.title
             else "stream" if source_kind == STREAM_SOURCE else "webcam"
         )
-        st.caption(f"●  LIVE — analysing {source_label}. Press **Stop** to finish.")
+        rc = getattr(analyzer, "reconnect_count", 0)
+        recon = f" · recovered {rc} stream drop{'s' if rc != 1 else ''}" if rc else ""
+        st.caption(f"●  LIVE — analysing {source_label}{recon}. "
+                   "Press **Stop** to finish.")
         ph = make_placeholders()
         ended = False
         for _ in range(2):  # small batch keeps the Stop button responsive

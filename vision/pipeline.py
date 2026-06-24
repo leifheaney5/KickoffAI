@@ -13,6 +13,7 @@ specialised modules in the right order and assembles their results into the
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -42,6 +43,17 @@ from .sources import resolve_video_source
 from .teams import JerseyOCR, TeamClassifier, torso_patch
 
 FrameCallback = Callable[[FrameRecord], None]
+
+# FFmpeg options OpenCV applies to network captures (HLS/RTSP/RTMP). Reconnect at
+# the protocol level and time out a stalled read after 15s (microseconds) so the
+# socket retries instead of blocking the whole live loop. Pairs are "key;value"
+# joined by "|", per OpenCV's OPENCV_FFMPEG_CAPTURE_OPTIONS format.
+DEFAULT_FFMPEG_CAPTURE_OPTIONS = (
+    "reconnect;1|reconnect_streamed;1|reconnect_delay_max;5|rw_timeout;15000000"
+)
+
+# Source kinds that live on the network and are worth reconnecting on a stall.
+_NETWORK_KINDS = {"url", "youtube"}
 
 
 class JerseyBinder:
@@ -116,6 +128,67 @@ class MatchAnalyzer:
         self.binder = JerseyBinder()
         self.engine = StatsEngine(self.config)
 
+        # Live-source bookkeeping (set in open(); used by step()'s reconnect).
+        self._source_input = None
+        self.reconnect_count = 0
+
+    # ------------------------------------------------------------------ #
+    # Capture helpers — shared by run() and the stepping API.
+    # ------------------------------------------------------------------ #
+    def _open_capture(self, resolved):
+        """Build a VideoCapture for a resolved source, tuned for live streams."""
+        import cv2
+
+        if resolved.kind in _NETWORK_KINDS:
+            # OpenCV reads these env options when the capture is constructed.
+            opts = (self.config.ffmpeg_capture_options
+                    or DEFAULT_FFMPEG_CAPTURE_OPTIONS)
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = opts
+        cap = cv2.VideoCapture(resolved.capture_source)
+        if cap.isOpened() and resolved.kind in _NETWORK_KINDS:
+            # Keep latency low: hold the smallest buffer so we read near the
+            # live edge instead of drifting behind on a long match.
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+        return cap
+
+    def _reconnect(self) -> bool:
+        """Re-open a dropped network stream from the live edge. True on success.
+
+        Re-resolves the original input first so expiring media URLs (YouTube) get
+        a fresh address; a direct Veo ``.m3u8`` simply resolves back to itself.
+        """
+        import time
+
+        if not self.config.live_reconnect or self._source_input is None:
+            return False
+        resolved = getattr(self, "_resolved_source", None)
+        if resolved is None or resolved.kind not in _NETWORK_KINDS:
+            return False
+        if self.reconnect_count >= self.config.live_max_reconnects:
+            return False
+
+        for attempt in range(1, self.config.live_reconnect_attempts + 1):
+            try:
+                if self._cap is not None:
+                    self._cap.release()
+            except Exception:
+                pass
+            time.sleep(min(5.0, self.config.live_reconnect_backoff * attempt))
+            try:
+                fresh = resolve_video_source(self._source_input)
+                cap = self._open_capture(fresh)
+            except Exception:
+                cap = None
+            if cap is not None and cap.isOpened():
+                self._cap = cap
+                self._resolved_source = fresh
+                self.reconnect_count += 1
+                return True
+        return False
+
     # ------------------------------------------------------------------ #
     def run(self, video_path: str) -> MatchStats:
         """Process a video file or URL end to end and return the stats document."""
@@ -130,7 +203,7 @@ class MatchAnalyzer:
 
         resolved = resolve_video_source(video_path)
         self._resolved_source = resolved
-        cap = cv2.VideoCapture(resolved.capture_source)
+        cap = self._open_capture(resolved)
         if not cap.isOpened():
             raise FileNotFoundError(f"Could not open video: {video_path}")
 
@@ -196,9 +269,12 @@ class MatchAnalyzer:
             gate=self.config.reid_gate_norm,
             max_lost_frames=self.config.reid_max_lost_frames,
         )
+        # Remember the raw input so a dropped network stream can be reconnected.
+        self._source_input = source
+        self.reconnect_count = 0
         resolved = resolve_video_source(source)
         self._resolved_source = resolved
-        self._cap = cv2.VideoCapture(resolved.capture_source)
+        self._cap = self._open_capture(resolved)
         if not self._cap.isOpened():
             raise FileNotFoundError(f"Could not open video source: {source!r}")
         self._source_fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -221,6 +297,12 @@ class MatchAnalyzer:
         while True:
             ok, frame = cap.read()
             if not ok:
+                # A live network feed may have stalled rather than ended; try to
+                # reconnect from the live edge before giving up. Files / cameras
+                # (or an exhausted reconnect budget) just stop here.
+                if self._reconnect():
+                    cap = self._cap
+                    continue
                 return None
             self._raw_index += 1
             if self._raw_index % self.config.frame_stride != 0:
