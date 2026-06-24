@@ -76,8 +76,9 @@ formation, territory, and the "Ask the analyst about positioning" Q&A.
 **⚠** On a CPU laptop, lower `--imgsz` (e.g. 960) to speed inference up.
 
 ## 4. Getting a match clip (use 1080p)
-The source is a full match on YouTube. Pull short windows — don't download the
-whole 2+ hours.
+The Video Analysis page and CLI can open a YouTube URL directly for live
+analysis. For training, validation, or repeatable debugging, pull short windows
+instead of downloading the whole 2+ hours.
 ```bash
 FFMPEG=$(python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
 python -m yt_dlp --ffmpeg-location "$FFMPEG" --download-sections "*44:20-44:50" \

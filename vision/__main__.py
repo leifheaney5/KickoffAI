@@ -49,7 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m vision",
         description="Local soccer video analysis -> match_stats.json",
     )
-    p.add_argument("--video", required=True, help="Path to the match video.")
+    p.add_argument(
+        "--video", required=True,
+        help="Path, direct stream URL, or YouTube URL for the match video.",
+    )
     p.add_argument("--output", default="match_stats.json", help="Output JSON path.")
     p.add_argument("--model", default="yolov8x.pt", help="YOLO model weights.")
     p.add_argument(

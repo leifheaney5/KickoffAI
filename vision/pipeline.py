@@ -38,6 +38,7 @@ from .schema import (
     format_timestamp,
     player_token,
 )
+from .sources import resolve_video_source
 from .teams import JerseyOCR, TeamClassifier, torso_patch
 
 FrameCallback = Callable[[FrameRecord], None]
@@ -117,7 +118,7 @@ class MatchAnalyzer:
 
     # ------------------------------------------------------------------ #
     def run(self, video_path: str) -> MatchStats:
-        """Process ``video_path`` end to end and return the stats document."""
+        """Process a video file or URL end to end and return the stats document."""
         import cv2
 
         from .tracking import IdentityManager
@@ -127,7 +128,9 @@ class MatchAnalyzer:
             max_lost_frames=self.config.reid_max_lost_frames,
         )
 
-        cap = cv2.VideoCapture(video_path)
+        resolved = resolve_video_source(video_path)
+        self._resolved_source = resolved
+        cap = cv2.VideoCapture(resolved.capture_source)
         if not cap.isOpened():
             raise FileNotFoundError(f"Could not open video: {video_path}")
 
@@ -184,7 +187,7 @@ class MatchAnalyzer:
     # responsive (start/stop) instead of blocking inside run().
     # ------------------------------------------------------------------ #
     def open(self, source) -> "MatchAnalyzer":
-        """Open a video source (file path or camera index) for stepping."""
+        """Open a video source (file path, URL, or camera index) for stepping."""
         import cv2
 
         from .tracking import IdentityManager
@@ -193,7 +196,9 @@ class MatchAnalyzer:
             gate=self.config.reid_gate_norm,
             max_lost_frames=self.config.reid_max_lost_frames,
         )
-        self._cap = cv2.VideoCapture(source)
+        resolved = resolve_video_source(source)
+        self._resolved_source = resolved
+        self._cap = cv2.VideoCapture(resolved.capture_source)
         if not self._cap.isOpened():
             raise FileNotFoundError(f"Could not open video source: {source!r}")
         self._source_fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0

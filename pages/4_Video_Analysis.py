@@ -341,7 +341,7 @@ def list_cameras():
 
 
 def make_placeholders():
-    """Create the live view placeholders: camera, tactical map, metrics, feed."""
+    """Create the live view placeholders: source frame, map, metrics, feed."""
     v_col, t_col = st.columns(2)
     p = st.columns(5)
     return {
@@ -387,9 +387,12 @@ def render_live(ph, analyzer, counters, frame, dets, record, map_layers, trail):
 # Controls
 # --------------------------------------------------------------------------- #
 st.markdown("#### Source & model")
+STREAM_SOURCE = "YouTube / stream URL"
+LIVE_SOURCES = {"Webcam (live)", STREAM_SOURCE}
 source_kind = st.radio(
-    "Source", ["Video file", "Webcam (live)"], horizontal=True,
-    help="Analyse a recorded video, or run detection live off a connected camera.")
+    "Source", ["Video file", "Webcam (live)", STREAM_SOURCE], horizontal=True,
+    help="Analyse a recorded video, or run detection live from a camera or stream.")
+is_live_source = source_kind in LIVE_SOURCES
 
 c1, c2 = st.columns([2, 1])
 with c1:
@@ -399,7 +402,8 @@ with c1:
         video_path = st.text_input("Video file path", value=seed,
                                    placeholder="path/to/match.mp4")
         cam_index = None
-    else:
+        stream_url = None
+    elif source_kind == "Webcam (live)":
         cams = list_cameras()
         if cams:
             labels = {i: f"[{i}] {n}" for i, n in cams}
@@ -413,12 +417,23 @@ with c1:
                 help="Could not auto-list cameras; enter the device index "
                      "(0 is usually the built-in camera).")
         video_path = None
+        stream_url = None
+    else:
+        seed = st.session_state.get("kp_va_stream_url", "")
+        stream_url = st.text_input(
+            "YouTube or stream URL",
+            value=seed,
+            placeholder="https://www.youtube.com/live/... or https://.../index.m3u8",
+            help="YouTube URLs are resolved with yt-dlp; direct HLS/RTSP/RTMP/HTTP "
+                 "video URLs are opened directly through OpenCV/FFmpeg.")
+        video_path = None
+        cam_index = None
 with c2:
     backend = st.radio("Detection backend", ["Roboflow (cloud)", "Local YOLO"],
                        horizontal=False)
 
 # Path A: record a match from a webcam to a file, then analyse that file. Live
-# analysis (Path B) is the "Webcam (live)" source above; this is the fallback —
+# source analysis is handled by the stepping loop below; this is the fallback:
 # capture now, analyse later, and re-run as many times as you like.
 if source_kind == "Video file" and screen_recorder.is_supported():
     with st.expander("Record a match from your webcam (then analyse the file)"):
@@ -527,7 +542,7 @@ else:
 
 s1, s2, s3, s4 = st.columns(4)
 stride = s1.slider("Frame stride", 1, 15, 6, help="Process 1 of every N frames.")
-if source_kind == "Webcam (live)":
+if is_live_source:
     max_seconds = s2.slider("Max seconds (0 = until stopped)", 0, 1800, 0, 30)
 else:
     max_seconds = s2.slider("Max seconds", 5, 120, 20)
@@ -587,7 +602,7 @@ def build_config():
         # Relax possession a touch for the lower sampled frame-rate.
         possession_frames=max(6, 60 // stride),
         # Bound memory for open-ended live sessions; unlimited for files.
-        max_frames_recorded=4000 if source_kind == "Webcam (live)" else 0,
+        max_frames_recorded=4000 if is_live_source else 0,
         output_path="match_stats.json",
     )
 
@@ -665,14 +680,14 @@ if source_kind == "Video file":
 
 
 # --------------------------------------------------------------------------- #
-# Webcam — live stepping loop, so Start/Stop stays responsive
+# Live sources — stepping loop, so Start/Stop stays responsive
 # --------------------------------------------------------------------------- #
 else:
     LIVE = "kp_live"
     running = st.session_state.get(LIVE + "_running", False)
 
     def finalize_live():
-        """Stop the camera, assemble stats, and feed the dashboard."""
+        """Stop the live source, assemble stats, and feed the dashboard."""
         analyzer = st.session_state.get(LIVE + "_analyzer")
         if analyzer is not None:
             stats = analyzer.close()
@@ -691,12 +706,24 @@ else:
         if backend.startswith("Roboflow") and not api_key:
             st.error("A Roboflow API key is required for the cloud backend.")
             st.stop()
+        if source_kind == STREAM_SOURCE:
+            stream_url = (stream_url or "").strip()
+            if not stream_url:
+                st.error("Enter a YouTube live URL or direct stream URL.")
+                st.stop()
+            st.session_state["kp_va_stream_url"] = stream_url
+            live_source = stream_url
+            live_label = "stream"
+        else:
+            live_source = int(cam_index)
+            live_label = f"camera #{cam_index}"
         cfg = build_config()
         try:
             analyzer = MatchAnalyzer(cfg, pitch_detector=make_pitch_detector(cfg))
-            analyzer.open(int(cam_index))
+            with st.spinner(f"Opening {live_label}..."):
+                analyzer.open(live_source)
         except Exception as exc:
-            st.error(f"Could not open camera #{cam_index}: {exc}")
+            st.error(f"Could not open {live_label}: {exc}")
             st.stop()
         st.session_state[LIVE + "_analyzer"] = analyzer
         st.session_state[LIVE + "_running"] = True
@@ -713,7 +740,12 @@ else:
         analyzer = st.session_state[LIVE + "_analyzer"]
         counters = st.session_state[LIVE + "_counters"]
         trail = st.session_state[LIVE + "_trail"]
-        st.caption("●  LIVE — analysing webcam. Press **Stop** to finish.")
+        resolved = getattr(analyzer, "_resolved_source", None)
+        source_label = (
+            resolved.title if resolved is not None and resolved.title
+            else "stream" if source_kind == STREAM_SOURCE else "webcam"
+        )
+        st.caption(f"●  LIVE — analysing {source_label}. Press **Stop** to finish.")
         ph = make_placeholders()
         ended = False
         for _ in range(2):  # small batch keeps the Stop button responsive
@@ -736,10 +768,15 @@ else:
             st.rerun()
         st.rerun()
     else:
-        st.caption(
-            "Pick a camera and model, then **Start live**. For useful pitch "
-            "analytics mount the camera high and wide so the lines are visible; "
-            "a low sideline angle still gives detections but a weak tactical map.")
+        if source_kind == STREAM_SOURCE:
+            st.caption(
+                "Paste a YouTube live URL or direct stream URL, pick a model, then "
+                "**Start live**. Stream quality and latency depend on the source.")
+        else:
+            st.caption(
+                "Pick a camera and model, then **Start live**. For useful pitch "
+                "analytics mount the camera high and wide so the lines are visible; "
+                "a low sideline angle still gives detections but a weak tactical map.")
 
 
 # --------------------------------------------------------------------------- #

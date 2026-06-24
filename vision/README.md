@@ -44,12 +44,18 @@ pip install -r requirements.txt -r vision/requirements.txt
 # Quick demo on a stock COCO model (players + ball only, uncalibrated):
 python -m vision --video match.mp4
 
+# YouTube live/watch URL, or direct HLS/RTSP/RTMP stream URL:
+python -m vision --video "https://www.youtube.com/live/VIDEO_ID"
+
 # Full run: fine-tuned model, four pitch reference points, GPU:
 python -m vision --video match.mp4 \
     --model models/soccer_yolov8x.pt --device cuda --tracker botsort \
     --points "120,80;1800,75;1850,1000;90,1010" \
     --output match_stats.json
 ```
+
+YouTube URLs are resolved with `yt-dlp` into a temporary media/HLS URL, then
+opened by OpenCV/FFmpeg. Direct stream URLs are passed straight to OpenCV.
 
 `--points` are four image-pixel landmarks (e.g. the four corner flags, in a
 consistent order). `--pitch-points` optionally gives their real positions in

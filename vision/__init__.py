@@ -42,6 +42,13 @@ from .schema import (
     PlayerState,
     PossessionSummary,
 )
+from .sources import (
+    ResolvedVideoSource,
+    SourceResolutionError,
+    is_url,
+    is_youtube_url,
+    resolve_video_source,
+)
 from .teams import JerseyOCR, TeamClassifier
 from .tracking import IdentityManager
 
@@ -67,4 +74,9 @@ __all__ = [
     "PlayerState",
     "PassEvent",
     "PossessionSummary",
+    "ResolvedVideoSource",
+    "SourceResolutionError",
+    "is_url",
+    "is_youtube_url",
+    "resolve_video_source",
 ]

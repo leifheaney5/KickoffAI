@@ -14,6 +14,7 @@ numpy>=1.24.0
 scikit-learn>=1.3.0       # K-Means torso-colour team clustering
 easyocr>=1.7.0            # local, offline jersey-number OCR
 supervision>=0.20.0       # detection/track utils, annotators, sample assets
+yt-dlp>=2024.04.09        # resolve YouTube live/watch URLs to OpenCV stream URLs
 
 # Optional — Roboflow hosted/local model backend + per-frame pitch homography.
 inference-sdk>=0.9.0      # run Roboflow soccer models (player + pitch keypoints)
