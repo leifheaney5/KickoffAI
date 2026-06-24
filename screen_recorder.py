@@ -76,6 +76,12 @@ def _screen_index(video_devices) -> int | None:
     return None
 
 
+def list_cameras() -> list[tuple[int, str]]:
+    """Connected camera / capture devices (excludes the screen pseudo-device)."""
+    video, _ = list_devices()
+    return [(i, n) for i, n in video if "capture screen" not in n.lower()]
+
+
 def _mic_index(audio_devices):
     """Pick the mic: KICKOFF_MIC (index or name substring), else the first."""
     if not audio_devices:
@@ -146,45 +152,66 @@ def status() -> dict:
         "recording": recording,
         "elapsed": elapsed,
         "file": st.get("file"),
+        "kind": st.get("kind", "screen"),
         "started_at": st.get("started_at"),
         "log": st.get("log"),
         "ended_unexpectedly": st.get("ended_unexpectedly", False),
     }
 
 
-def start(label: str = "") -> dict:
-    """Start a screen+mic recording. Returns a result dict.
+def start(label: str = "", source="screen") -> dict:
+    """Start a recording of ``source`` plus the mic. Returns a result dict.
 
-    On failure (no ffmpeg, no screen device, permission denied) returns
-    {"ok": False, "error": "..."} and leaves no recording running.
+    ``source`` is ``"screen"`` (the default) or a camera device index (int or
+    digit string) from :func:`list_cameras`. On failure (no ffmpeg, missing
+    device, permission denied) returns ``{"ok": False, "error": "..."}`` and
+    leaves no recording running.
     """
     if not is_supported():
-        return {"ok": False, "error": "Screen recording needs macOS + ffmpeg."}
+        return {"ok": False, "error": "Recording needs macOS + ffmpeg."}
     if status()["recording"]:
         return {"ok": False, "error": "A recording is already in progress."}
 
     video, audio = list_devices()
-    vidx = _screen_index(video)
-    if vidx is None:
-        return {"ok": False,
-                "error": "No 'Capture screen' device found. Grant Screen "
-                         "Recording permission, then restart the app."}
+    is_screen = source == "screen"
+    if is_screen:
+        vidx = _screen_index(video)
+        perm = "Screen Recording"
+        if vidx is None:
+            return {"ok": False,
+                    "error": "No 'Capture screen' device found. Grant Screen "
+                             "Recording permission, then restart the app."}
+    else:
+        perm = "Camera"
+        try:
+            vidx = int(source)
+        except (TypeError, ValueError):
+            vidx = None
+        if vidx is None or not any(i == vidx for i, _ in video):
+            return {"ok": False, "error": f"Camera #{source} not found. "
+                    "Plug it in and restart the app."}
+
     aidx = _mic_index(audio)
     spec = f"{vidx}:{aidx}" if aidx is not None else f"{vidx}:none"
 
     os.makedirs(RECORD_DIR, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", label).strip("-").lower()
-    base = f"{stamp}{('-' + slug) if slug else ''}"
+    tail = ("-" + slug) if slug else ""
+    # Keep the established screen filename; tag webcam files so they're findable.
+    base = f"{stamp}{tail}" if is_screen else f"{stamp}-webcam{tail}"
     outfile = os.path.join(RECORD_DIR, base + ".mp4")
     logfile = os.path.join(RECORD_DIR, base + ".log")
 
-    # Note: don't force -framerate on avfoundation screen capture — it makes the
-    # device configuration fall back and can stall startup. Let it self-select.
-    cmd = [
-        _ffmpeg_path(), "-y",
-        "-f", "avfoundation",
-        "-capture_cursor", "1",
+    # Note: don't force -framerate on avfoundation capture — it makes the device
+    # configuration fall back and can stall startup. Let it self-select.
+    cmd = [_ffmpeg_path(), "-y", "-f", "avfoundation"]
+    if is_screen:
+        cmd += ["-capture_cursor", "1"]   # cursor only applies to the screen
+    else:
+        # Cameras reject avfoundation's 29.97 default; pin to a supported rate.
+        cmd += ["-framerate", "30"]
+    cmd += [
         "-i", spec,
         "-c:v", "h264_videotoolbox", "-b:v", "6000k", "-pix_fmt", "yuv420p",
     ]
@@ -202,13 +229,13 @@ def start(label: str = "") -> dict:
         log_fh.close()
 
     # Give ffmpeg a moment to open the devices; if it dies immediately the most
-    # likely cause is a denied Screen Recording permission.
+    # likely cause is a denied capture permission.
     time.sleep(1.3)
     if proc.poll() is not None:
         err = _log_tail(logfile)
-        hint = ("Screen Recording permission is likely denied. Enable it for "
-                "your terminal/Python in System Settings → Privacy & Security "
-                "→ Screen Recording, then restart the app.")
+        hint = (f"{perm} permission is likely denied. Enable it for your "
+                f"terminal/Python in System Settings → Privacy & Security → "
+                f"{perm}, then restart the app.")
         return {"ok": False, "error": hint, "detail": err}
 
     _write_state({
@@ -218,6 +245,7 @@ def start(label: str = "") -> dict:
         "log": logfile,
         "started_at": time.time(),
         "device": spec,
+        "kind": "screen" if is_screen else "webcam",
         "ended_unexpectedly": False,
     })
     return {"ok": True, "file": outfile, "pid": proc.pid}
