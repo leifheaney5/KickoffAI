@@ -21,11 +21,13 @@ import sys
 import tempfile
 import time
 import wave
+import audioop
 from collections import Counter
 from datetime import datetime, timezone
 
 import requests
 
+import audio_ingest
 import control
 
 # --------------------------------------------------------------------------- #
@@ -36,11 +38,12 @@ DATA_FILE = os.environ.get("KICKOFF_DATA_FILE", "match_data.json")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
-# Whisper model size. "base.en" is a good speed/accuracy balance on a MacBook Air.
-WHISPER_OPENAI_MODEL = os.environ.get("WHISPER_MODEL", "base.en")
+# Whisper model size. "medium.en" favors accurate short soccer commands over
+# minimum latency. Override WHISPER_MODEL / WHISPER_MLX_MODEL for speed tests.
+WHISPER_OPENAI_MODEL = os.environ.get("WHISPER_MODEL", "medium.en")
 # mlx-whisper expects a HuggingFace repo id.
 WHISPER_MLX_MODEL = os.environ.get(
-    "WHISPER_MLX_MODEL", "mlx-community/whisper-base.en-mlx"
+    "WHISPER_MLX_MODEL", "mlx-community/whisper-medium.en-mlx"
 )
 
 # Microphone selection. Unset = the system default input. Set to a device index
@@ -61,6 +64,8 @@ _ENV_ENERGY = os.environ.get("KICKOFF_ENERGY_THRESHOLD")  # fixed value if set
 ENERGY_THRESHOLD = float(_ENV_ENERGY) if _ENV_ENERGY else None
 DYNAMIC_ENERGY = os.environ.get("KICKOFF_DYNAMIC_ENERGY", "0") == "1"
 PAUSE_THRESHOLD = float(os.environ.get("KICKOFF_PAUSE_THRESHOLD", "0.8"))
+PHRASE_TIME_LIMIT = float(os.environ.get("KICKOFF_PHRASE_TIME_LIMIT", "10"))
+POST_SPEECH_PADDING = float(os.environ.get("KICKOFF_POST_SPEECH_PADDING", "0.15"))
 
 # Speech acceptance: ignore too-short blips and low-confidence / repetitive
 # transcripts (Whisper's classic hallucinations on near-silence).
@@ -82,7 +87,8 @@ HALLUCINATION_PHRASES = {
 # two-word minimum so a lone "Goal!" / "Corner!" still counts.
 SOCCER_KEYWORDS = {
     "goal", "corner", "offside", "penalty", "foul", "save", "saved",
-    "card", "tackle", "handball", "shot", "block", "header", "cross",
+    "card", "yellow", "red", "tackle", "handball", "shot", "block",
+    "header", "cross", "substitution", "clearance",
 }
 
 
@@ -91,29 +97,88 @@ SOCCER_KEYWORDS = {
 INITIAL_PROMPT = os.environ.get(
     "KICKOFF_INITIAL_PROMPT",
     "Live soccer match commentary. The two sides are called Home and Away. "
-    "Common phrases: home team, away team, pass, shot, save, tackle, foul, goal, "
-    "corner, offside, header, cross, dribble, clearance, interception, "
-    "yellow card, red card, penalty, substitution, throw in, goal kick.")
+    "Preserve soccer vocabulary and shirt numbers exactly. Common phrases: "
+    "home team, away team, number 4, number 10, pass complete, pass incomplete, "
+    "shot, shot on target, blocked shot, save, keeper save, tackle, foul, goal, "
+    "corner, corner kick, offside, header, cross, dribble, clearance, "
+    "interception, yellow card, red card, handball, penalty, substitution, "
+    "throw-in, goal kick, left wing, right wing, midfield, penalty box.")
 
 # Post-transcription fixes for words Whisper reliably mangles. Applied with
-# word boundaries, case-insensitively, before parsing — chiefly the Home/Away
-# side names, which the model loves to turn into "la", "the way", "om", etc.
+# word boundaries, case-insensitively, before parsing. This is our lightweight
+# domain lexicon: Whisper cannot be hotword-trained here, but nudging common
+# soccer homophones before intent parsing recovers many otherwise-lost events.
 _CORRECTIONS = [
     (r"\b(?:la|le|lay) team\b", "away team"),
     (r"\b(?:a|the) way team\b", "away team"),
     (r"\baway team\b", "away team"),
     (r"\bsave (?:la|le|a|the) way\b", "save away"),
     (r"\b(?:om|ohm|hom|hum|hone) team\b", "home team"),
+    (r"\b(number|num|no\.?)\s+(?:to|too)\b", r"\1 2"),
+    (r"\b(number|num|no\.?)\s+(?:for|fore)\b", r"\1 4"),
+    (r"\b(number|num|no\.?)\s+(?:ate)\b", r"\1 8"),
+    (r"\b(number|num|no\.?)\s+(?:won)\b", r"\1 1"),
+    (r"\bgold\b", "goal"),
+    (r"\bgold kick\b", "goal kick"),
+    (r"\bcorn\s+(?:er|her)\b", "corner"),
+    (r"\bcoroner\b", "corner"),
+    (r"\boff\s+sides?\b", "offside"),
+    (r"\boffside[s]?\b", "offside"),
+    (r"\bsafe\b(?!\s+pass)", "save"),
+    (r"\bshut\b", "shot"),
+    (r"\byellow\s+car\b", "yellow card"),
+    (r"\bred\s+car\b", "red card"),
+    (r"\bhand\s+ball\b", "handball"),
     (r"\bthrow in\b", "throw-in"),
+    (r"\bthrow and\b", "throw-in"),
 ]
 _CORRECTIONS = [(re.compile(p, re.I), r) for p, r in _CORRECTIONS]
 
+_NUMBER_WORDS = {
+    "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+    "ninety": 90,
+}
+_NUMBER_WORD_RE = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
+_SPOKEN_NUMBER = re.compile(
+    rf"\b(number|num|no\.?|#)\s+"
+    rf"(({_NUMBER_WORD_RE})(?:[\s-]+({_NUMBER_WORD_RE}))?)\b",
+    re.I,
+)
+
+
+def _parse_spoken_number(words: str):
+    parts = [p for p in re.split(r"[\s-]+", words.lower()) if p]
+    if not parts or any(p not in _NUMBER_WORDS for p in parts):
+        return None
+    # "one zero" is common for #10, while "twenty one" should be #21.
+    if len(parts) == 2 and 0 < _NUMBER_WORDS[parts[0]] < 10:
+        return _NUMBER_WORDS[parts[0]] * 10 + _NUMBER_WORDS[parts[1]]
+    return sum(_NUMBER_WORDS[p] for p in parts)
+
+
+def _normalise_spoken_numbers(text: str) -> str:
+    def repl(match):
+        number = _parse_spoken_number(match.group(2))
+        if number is None:
+            return match.group(0)
+        marker = "#" if match.group(1) == "#" else match.group(1)
+        return f"{marker} {number}"
+
+    return _SPOKEN_NUMBER.sub(repl, text)
+
 
 def apply_corrections(text: str) -> str:
-    """Repair common Whisper mishearings (mainly the Home/Away side names)."""
+    """Repair common Whisper mishearings before parsing."""
     out = text or ""
     for pattern, repl in _CORRECTIONS:
         out = pattern.sub(repl, out)
+    out, _applied = audio_ingest.apply_learned_corrections(out)
+    out = _normalise_spoken_numbers(out)
     return out
 
 
@@ -296,13 +361,182 @@ phrase: "Away completes a pass in midfield"
 {"team":"Away","player":null,"action":"pass","result":"complete","location":"midfield"}"""
 
 
-def parse_event(text: str, lineups=None) -> dict:
+def _empty_event() -> dict:
+    return {
+        "team": None,
+        "player": None,
+        "action": None,
+        "result": None,
+        "location": None,
+    }
+
+
+def _has_event_bits(event: dict) -> bool:
+    return any(event.get(k) for k in _empty_event())
+
+
+def _match_any(text: str, patterns: list[str]) -> bool:
+    return any(re.search(pattern, text, re.I) for pattern in patterns)
+
+
+def infer_event_from_text(text: str) -> dict:
+    """Best-effort local parser for obvious soccer events.
+
+    This is intentionally small and conservative. It does not replace the LLM
+    parser; it fills common action/team/result fields when a corrected transcript
+    contains unambiguous soccer vocabulary or when Ollama is unavailable.
+    """
+    event = _empty_event()
+    raw = text or ""
+    low = re.sub(r"[^a-z0-9#\s-]+", " ", raw.lower())
+    low = re.sub(r"\s+", " ", low).strip()
+    if not low:
+        return event
+
+    if re.search(r"\bhome(?:\s+team|\s+side)?\b", low):
+        event["team"] = "Home"
+    elif re.search(r"\baway(?:\s+team|\s+side)?\b", low):
+        event["team"] = "Away"
+
+    player = _extract_player_ref(low)
+    if player:
+        event["player"] = player
+
+    _infer_action_and_result(low, event)
+    event["location"] = _infer_location(low)
+    return event
+
+
+def _extract_player_ref(text: str):
+    m = re.search(r"\b(?:number|num|no\.?|#)\s*#?\s*(\d{1,3})\b", text, re.I)
+    if m:
+        return f"#{int(m.group(1))}"
+    return None
+
+
+def _infer_action_and_result(text: str, event: dict) -> None:
+    if _match_any(text, [r"\byellow\s+card\b", r"\bbooking\b"]):
+        event["action"] = "card"
+        event["result"] = "yellow"
+        return
+    if _match_any(text, [
+            r"\bred\s+card\b", r"\bsent\s+off\b", r"\bsecond\s+yellow\b"]):
+        event["action"] = "card"
+        event["result"] = "red"
+        return
+    if _match_any(text, [
+            r"\bgoal\b(?!\s+kick)", r"\bscores?\b", r"\bscored\b",
+            r"\bfinds?\s+the\s+net\b"]):
+        event["action"] = "goal"
+        event["result"] = "scored"
+        return
+    if _match_any(text, [
+            r"\bcorner\b", r"\bcorner\s+kick\b"]):
+        event["action"] = "corner"
+        return
+    if _match_any(text, [r"\boffside\b"]):
+        event["action"] = "offside"
+        return
+    if _match_any(text, [
+            r"\bsubstitution\b", r"\bsubbed\b", r"\bcomes?\s+on\b",
+            r"\bcomes?\s+off\b"]):
+        event["action"] = "substitution"
+        return
+    if _match_any(text, [
+            r"\bsave\b", r"\bsaved\b", r"\bkeeper\s+stop", r"\bstops?\b"]):
+        event["action"] = "save"
+        event["result"] = "saved"
+        return
+    if _match_any(text, [
+            r"\bshot\b", r"\bshoots?\b", r"\bstrike\b", r"\beffort\b",
+            r"\battempt\b"]):
+        event["action"] = "shot"
+        if _match_any(text, [r"\bblocked\b", r"\bblock\b"]):
+            event["result"] = "blocked"
+        elif _match_any(text, [r"\bon\s+target\b", r"\bon\s+goal\b"]):
+            event["result"] = "on target"
+        elif _match_any(text, [r"\bsaved\b", r"\bkeeper\s+save\b"]):
+            event["result"] = "saved"
+        elif _match_any(text, [r"\bmiss(?:es|ed)?\b", r"\bwide\b", r"\bover\b"]):
+            event["result"] = "missed"
+        return
+    if _match_any(text, [r"\bfoul\b", r"\bfouled\b", r"\bfree\s+kick\b"]):
+        event["action"] = "foul"
+        return
+    if _match_any(text, [r"\btackle\b", r"\btackles\b", r"\bchallenge\b"]):
+        event["action"] = "tackle"
+        if _match_any(text, [r"\bwon\b", r"\bwins\b"]):
+            event["result"] = "won"
+        elif _match_any(text, [r"\blost\b", r"\bloses\b"]):
+            event["result"] = "lost"
+        return
+    if _match_any(text, [r"\binterception\b", r"\bintercepts?\b"]):
+        event["action"] = "interception"
+        return
+    if _match_any(text, [r"\bclearance\b", r"\bclears?\b"]):
+        event["action"] = "clearance"
+        return
+    if _match_any(text, [r"\bcross\b", r"\bcrosses\b"]):
+        event["action"] = "cross"
+        return
+    if _match_any(text, [r"\bdribble\b", r"\bdribbles\b"]):
+        event["action"] = "dribble"
+        return
+    if _match_any(text, [r"\bpass\b", r"\bpasses\b", r"\bpassing\b"]):
+        event["action"] = "pass"
+        if _match_any(text, [r"\bcomplete\b", r"\bcompleted\b", r"\bconnects\b"]):
+            event["result"] = "complete"
+        elif _match_any(text, [
+                r"\bincomplete\b", r"\bmiss(?:es|ed)?\b",
+                r"\bintercept(?:ed|ion)\b"]):
+            event["result"] = "incomplete"
+
+
+def _infer_location(text: str):
+    locations = [
+        ("left wing", [r"\bleft\s+wing\b", r"\bleft\s+flank\b"]),
+        ("right wing", [r"\bright\s+wing\b", r"\bright\s+flank\b"]),
+        ("midfield", [r"\bmidfield\b", r"\bmiddle\s+third\b"]),
+        ("penalty box", [r"\bpenalty\s+box\b", r"\bbox\b"]),
+        ("six-yard box", [r"\bsix\s+yard\s+box\b", r"\bsix-yard\s+box\b"]),
+        ("final third", [r"\bfinal\s+third\b"]),
+        ("defensive third", [r"\bdefensive\s+third\b"]),
+    ]
+    for location, patterns in locations:
+        if _match_any(text, patterns):
+            return location
+    return None
+
+
+def merge_events(primary: dict, fallback: dict) -> dict:
+    """Fill gaps in primary with deterministic fallback fields."""
+    merged = {**_empty_event(), **(primary or {})}
+    fallback = fallback or {}
+    for key in _empty_event():
+        if not merged.get(key) and fallback.get(key):
+            merged[key] = fallback[key]
+    return merged
+
+
+def resolve_event(event: dict, lineups=None) -> dict:
+    """Resolve roster-dependent fields on an already-normalised event."""
+    if not _has_event_bits(event):
+        return {}
+    event = {**_empty_event(), **event}
+    name, team = control.resolve_player(
+        lineups, event.get("player"), event.get("team"))
+    event["player"], event["team"] = name, team
+    return event
+
+
+def parse_event(text: str, lineups=None, return_source: bool = False):
     """Send transcript to Ollama and return a normalised event dict, or {}.
 
     When a lineup is available it is handed to the model as context (so spoken
     shirt numbers come back as names and the side is filled in), and the parsed
     player is resolved against the roster as a deterministic backstop.
     """
+    fallback = infer_event_from_text(text)
     system = SYSTEM_PROMPT
     roster = control.roster_prompt(lineups)
     if roster:
@@ -330,17 +564,19 @@ def parse_event(text: str, lineups=None) -> dict:
         event = json.loads(content)
     except requests.exceptions.RequestException as exc:
         print(f"[brain] Ollama request failed: {exc}", flush=True)
-        return {}
+        event = resolve_event(fallback, lineups)
+        return (event, "fallback") if return_source else event
     except (KeyError, ValueError) as exc:
         print(f"[brain] could not parse model output: {exc}", flush=True)
-        return {}
+        event = resolve_event(fallback, lineups)
+        return (event, "fallback") if return_source else event
 
-    event = normalise(event)
+    model_event = normalise(event)
+    source = "ollama+fallback" if _has_event_bits(fallback) else "ollama"
+    event = merge_events(model_event, fallback)
     # Deterministic backstop: map shirt numbers to names and infer the side.
-    name, team = control.resolve_player(
-        lineups, event.get("player"), event.get("team"))
-    event["player"], event["team"] = name, team
-    return event
+    event = resolve_event(event, lineups)
+    return (event, source) if return_source else event
 
 
 def normalise(event: dict) -> dict:
@@ -385,7 +621,7 @@ def normalise_player(player):
     """
     if not player:
         return None
-    s = player.strip()
+    s = _normalise_spoken_numbers(player.strip())
     m = re.search(r"(?:number|num|no\.?|#|player)\s*#?\s*(\d{1,3})", s, re.I)
     if m:
         return f"#{int(m.group(1))}"
@@ -459,6 +695,63 @@ def write_wav(audio, path: str) -> None:
         wf.writeframes(audio.get_raw_data())
 
 
+def audio_energy(audio):
+    try:
+        return int(audioop.rms(audio.frame_data, audio.sample_width))
+    except Exception:
+        return None
+
+
+def _float_setting(value, default, lo, hi):
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        f = default
+    return max(lo, min(hi, f))
+
+
+def chunking_config(ctrl=None) -> dict:
+    saved = (ctrl or {}).get("audio_chunking") or {}
+    return {
+        "phrase_time_limit": _float_setting(
+            saved.get("phrase_time_limit"), PHRASE_TIME_LIMIT, 2.0, 20.0),
+        "pause_threshold": _float_setting(
+            saved.get("pause_threshold"), PAUSE_THRESHOLD, 0.25, 2.0),
+        "min_phrase_sec": _float_setting(
+            saved.get("min_phrase_sec"), MIN_PHRASE_SEC, 0.1, 2.0),
+        "post_speech_padding": _float_setting(
+            saved.get("post_speech_padding"), POST_SPEECH_PADDING, 0.0, 1.0),
+    }
+
+
+def write_review(*, timestamp: str, match_time: str, event_timestamp,
+                 audio, raw_text, corrected_text, event, status: str, reason,
+                 latency_ms) -> dict:
+    audio_rel = None
+    try:
+        audio_rel = audio_ingest.save_review_audio(audio, write_wav, timestamp)
+    except Exception as exc:
+        print(f"[review] could not save audio: {exc}", flush=True)
+    record = audio_ingest.make_review_record(
+        timestamp=timestamp,
+        match_time=match_time,
+        event_timestamp=event_timestamp,
+        audio=audio_rel,
+        raw_text=raw_text,
+        corrected_text=corrected_text,
+        suggested_text=audio_ingest.suggested_text(event or {}),
+        parsed_event=event or {},
+        status=status,
+        reason=reason,
+        latency_ms=latency_ms,
+    )
+    try:
+        return audio_ingest.append_review(record)
+    except Exception as exc:
+        print(f"[review] could not save review record: {exc}", flush=True)
+        return record
+
+
 def main():
     # Graceful shutdown on SIGINT/SIGTERM.
     running = {"flag": True}
@@ -482,13 +775,15 @@ def main():
         requests.get(f"{OLLAMA_URL}/api/version", timeout=5).raise_for_status()
     except requests.exceptions.RequestException:
         print(f"[brain] WARNING: Ollama not reachable at {OLLAMA_URL}. "
-              "Events will be transcribed but not parsed until it is up.",
+              "Only simple keyword fallback parsing will run until it is up.",
               flush=True)
 
     transcriber = Transcriber()
     recognizer = sr.Recognizer()
     recognizer.dynamic_energy_threshold = DYNAMIC_ENERGY
-    recognizer.pause_threshold = PAUSE_THRESHOLD  # silence that ends a phrase
+    initial_chunking = chunking_config(control.load_control())
+    recognizer.pause_threshold = initial_chunking["pause_threshold"]
+    recognizer.non_speaking_duration = initial_chunking["post_speech_padding"]
 
     try:
         mic = pick_microphone(sr)
@@ -536,8 +831,14 @@ def main():
         "rec_accum": 0.0,
         "last_event": None,
         "last_heard": None,
+        "last_raw_heard": None,
+        "last_corrected_heard": None,
+        "last_ignored_reason": None,
+        "last_energy": None,
+        "energy_threshold": None,
         "events": len(load_events()),
         "backend": transcriber.backend,
+        "chunking": initial_chunking,
     }
     control.save_status(status)
 
@@ -545,6 +846,10 @@ def main():
     last_gate = None
     while running["flag"]:
         ctrl = control.load_control()
+        chunk_cfg = chunking_config(ctrl)
+        recognizer.pause_threshold = chunk_cfg["pause_threshold"]
+        recognizer.non_speaking_duration = chunk_cfg["post_speech_padding"]
+        status["chunking"] = chunk_cfg
 
         # Apply the live "background block-out" slider (unless a fixed env
         # threshold is pinned). Updating energy_threshold takes effect on the
@@ -556,6 +861,8 @@ def main():
                 print(f"[ear] block-out set to {gate}/100 -> energy threshold "
                       f"{recognizer.energy_threshold:.0f}", flush=True)
                 last_gate = gate
+        status["energy_threshold"] = recognizer.energy_threshold
+        status["noise_gate"] = ctrl.get("noise_gate", control.DEFAULT_NOISE_GATE)
 
         # Honour a pause requested from the dashboard: stop logging events.
         if ctrl.get("paused"):
@@ -583,7 +890,8 @@ def main():
         try:
             with mic as source:
                 audio = recognizer.listen(
-                    source, timeout=2, phrase_time_limit=10
+                    source, timeout=2,
+                    phrase_time_limit=chunk_cfg["phrase_time_limit"]
                 )
         except sr.WaitTimeoutError:
             continue  # no speech in this window; keep listening
@@ -594,35 +902,109 @@ def main():
 
         # Drop sub-threshold blips (a cough, a door) before paying for Whisper.
         duration = len(audio.frame_data) / (audio.sample_rate * audio.sample_width)
-        if duration < MIN_PHRASE_SEC:
+        energy = audio_energy(audio)
+        status["last_energy"] = energy
+        if duration < chunk_cfg["min_phrase_sec"]:
+            status["last_ignored_reason"] = f"audio too short {duration:.2f}s"
+            control.save_status(status)
             continue
 
         # Transcribe via a temp WAV file.
+        started = time.perf_counter()
         tmp_wav = None
         try:
             fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
             write_wav(audio, tmp_wav)
-            text, segments = transcriber.transcribe(tmp_wav)
+            raw_text, segments = transcriber.transcribe(tmp_wav)
         finally:
             if tmp_wav and os.path.exists(tmp_wav):
                 os.remove(tmp_wav)
 
         # Repair common mishearings (Home/Away side names) before anything else.
-        text = apply_corrections(text)
+        text = apply_corrections(raw_text)
+
+        # Stamp the current match-clock reading so reviews/feed/report can show it.
+        ctrl = control.load_control()
+        main_clk, added, _half = control.clock_label(ctrl["timer"])
+        match_time = f"{main_clk}{(' ' + added) if added else ''}"
 
         # Only log confident, speech-like transcripts — this is what keeps
         # background noise and Whisper hallucinations out of the match log.
         ok, reason = is_real_speech(text, segments)
+
+        # Calibration test mode consumes exactly one phrase and never logs it as
+        # a match event. It lets the dashboard show the whole ingest pipeline.
+        cal = ctrl.get("calibration_test") or {}
+        if cal.get("armed"):
+            event, parser_source = ({}, "none")
+            if ok:
+                event, parser_source = parse_event(
+                    text, lineups=ctrl.get("lineups"), return_source=True)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            result = {
+                "armed": False,
+                "requested_at": cal.get("requested_at"),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ok": ok,
+                "reason": reason,
+                "raw_text": raw_text,
+                "corrected_text": text,
+                "suggested_text": audio_ingest.suggested_text(event),
+                "parsed_event": event,
+                "parser_source": parser_source,
+                "energy": energy,
+                "energy_threshold": recognizer.energy_threshold,
+                "latency_ms": latency_ms,
+            }
+            status["calibration_test"] = result
+            ctrl["calibration_test"] = {
+                "armed": False,
+                "requested_at": cal.get("requested_at"),
+                "last_result_at": result["timestamp"],
+            }
+            control.save_control(ctrl)
+            write_review(
+                timestamp=result["timestamp"],
+                match_time=match_time,
+                event_timestamp=None,
+                audio=audio,
+                raw_text=raw_text,
+                corrected_text=text,
+                event=event,
+                status="calibration",
+                reason=reason,
+                latency_ms=latency_ms,
+            )
+            status["last_heard"] = text[:140] if text else None
+            status["last_raw_heard"] = raw_text[:140] if raw_text else None
+            status["last_corrected_heard"] = text[:140] if text else None
+            status["last_ignored_reason"] = None if ok else reason
+            control.save_status(status)
+            print(f"[calibration] {reason}: {text!r}", flush=True)
+            continue
+
         if not ok:
             if text:
                 print(f"[ear] ignored ({reason}): {text[:60]!r}", flush=True)
+                write_review(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    match_time=match_time,
+                    event_timestamp=None,
+                    audio=audio,
+                    raw_text=raw_text,
+                    corrected_text=text,
+                    event=None,
+                    status="ignored",
+                    reason=reason,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                )
+            status["last_heard"] = text[:140] if text else None
+            status["last_raw_heard"] = raw_text[:140] if raw_text else None
+            status["last_corrected_heard"] = text[:140] if text else None
+            status["last_ignored_reason"] = reason
+            control.save_status(status)
             continue
-
-        # Stamp the current match-clock reading so the feed/report can show it.
-        ctrl = control.load_control()
-        main_clk, added, _half = control.clock_label(ctrl["timer"])
-        match_time = f"{main_clk}{(' ' + added) if added else ''}"
 
         # Thoughts mode: capture the phrase as a free-form note, not an event,
         # and keep its audio clip so it can be played back under Match Insights.
@@ -653,13 +1035,20 @@ def main():
 
         print(f"[ear] heard: {text!r}", flush=True)
         status["last_heard"] = text[:140]
+        status["last_raw_heard"] = raw_text[:140] if raw_text else None
+        status["last_corrected_heard"] = text[:140]
+        status["last_ignored_reason"] = None
         control.save_status(status)
 
-        event = parse_event(text, lineups=ctrl.get("lineups"))
+        event, parser_source = parse_event(
+            text, lineups=ctrl.get("lineups"), return_source=True)
+        event_timestamp = datetime.now(timezone.utc).isoformat()
         record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": event_timestamp,
             "match_time": match_time,
-            "raw_text": text,
+            "raw_text": raw_text,
+            "corrected_text": text,
+            "parser_source": parser_source,
             "status": "pending",
             **(event or {
                 "team": None, "player": None, "action": None,
@@ -667,6 +1056,19 @@ def main():
             }),
         }
         append_event(record)
+        write_review(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            match_time=match_time,
+            event_timestamp=event_timestamp,
+            audio=audio,
+            raw_text=raw_text,
+            corrected_text=text,
+            event={k: record.get(k) for k in (
+                "team", "player", "action", "result", "location")},
+            status="pending",
+            reason=parser_source,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
         status["last_event"] = record["timestamp"]
         status["events"] = status.get("events", 0) + 1
         control.save_status(status)

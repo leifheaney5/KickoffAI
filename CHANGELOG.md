@@ -23,6 +23,54 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.5.0] - 2026-06-24
+
+### Added
+
+- Audio ingest review sidecars (`audio_reviews.json`, `review_audio/`) so each
+  captured phrase can keep its raw transcript, corrected transcript, audio clip,
+  parser source, latency, and linked event metadata.
+- Timeline "Did you mean..." review prompts for pending voice events, including
+  audio playback and learned correction capture from approvals or edits.
+- Local learned corrections (`corrections.json`) applied after built-in soccer
+  fixes and before spoken-number normalization.
+- Audio chunking controls, a quick-commentary preset, and mic calibration/test
+  phrase feedback in the Audio & Mic setup flow.
+- `audio_benchmark.py` for repeatable WAV-based ingest benchmarks with starter
+  phrase manifests.
+
+### Changed
+
+- Defaulted Whisper transcription to the medium English model for better short
+  soccer-command accuracy.
+- Ignored local audio review artifacts so deployments do not include runtime
+  clips or transcript sidecars.
+
+## [1.4.0] - 2026-06-24
+
+### Changed
+
+- Restructured the app around grouped, lifecycle-ordered navigation
+  (`st.navigation`): **Live → Set up → Analysis → After match**. The home page is
+  no longer a single long scroll.
+- Split the old monolithic home page into focused screens:
+  - **Live Match** (`pages/Live_Match.py`) - the match console: hero scoreboard,
+    status chips, transport controls, real-time feed + stats, and thought notes.
+  - **Match Setup** (`pages/Match_Setup.py`) - match details, team names/lineups,
+    and the numbered roster + formation editor (previously crammed into the
+    sidebar and the bottom of the home page).
+  - **Audio & Mic** (`pages/Audio_and_Mic.py`) - background block-out, audio
+    chunking, mic calibration, the voice guide, and screen capture.
+  - **Post-Match** (`pages/Post_Match.py`) - summary + AI draft, player
+    spotlight, report/data export, archive to library, and the share card.
+- `dashboard.py` is now a thin router that sets up the design system and defines
+  the grouped navigation; it no longer renders the home screen itself.
+
+### Added
+
+- `ui_helpers.py` - shared render/format helpers (scoreboard, status chips,
+  stats feed, mic calibration, AI summary, etc.) used across the new pages.
+
 ## [1.3.0] - 2026-06-24
 
 ### Added

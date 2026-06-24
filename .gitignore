@@ -15,6 +15,9 @@ status.json
 recorder.json
 notes.json
 notes_audio/
+audio_reviews.json
+corrections.json
+review_audio/
 reports/
 recordings/
 *.tmp

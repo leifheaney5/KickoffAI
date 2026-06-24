@@ -143,19 +143,43 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 |----------|---------|---------|
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
 | `OLLAMA_MODEL` | `llama3.2` | Model used for parsing |
-| `WHISPER_MLX_MODEL` | `mlx-community/whisper-base.en-mlx` | mlx-whisper model |
-| `WHISPER_MODEL` | `base.en` | openai-whisper fallback model |
+| `WHISPER_MLX_MODEL` | `mlx-community/whisper-medium.en-mlx` | mlx-whisper model |
+| `WHISPER_MODEL` | `medium.en` | openai-whisper fallback model |
+| `KICKOFF_INITIAL_PROMPT` | built-in soccer prompt | Optional Whisper vocabulary prompt |
 | `KICKOFF_DATA_FILE` | `match_data.json` | Where events are stored |
 | `KICKOFF_CONTROL_FILE` | `control.json` | Pause/timer/summary state |
+| `KICKOFF_AUDIO_REVIEWS_FILE` | `audio_reviews.json` | Audio review sidecar |
+| `KICKOFF_REVIEW_AUDIO_DIR` | `review_audio` | Saved review WAV clips |
+| `KICKOFF_CORRECTIONS_FILE` | `corrections.json` | Learned voice corrections |
+| `KICKOFF_PHRASE_TIME_LIMIT` | `10` | Max seconds per captured phrase |
+| `KICKOFF_POST_SPEECH_PADDING` | `0.15` | Non-speaking audio kept around phrases |
 | `KICKOFF_REPORTS_DIR` | `reports` | Where exported reports are written |
 | `KICKOFF_RECORD_DIR` | `recordings` | Where screen recordings are saved |
 | `KICKOFF_RECORDER_FILE` | `recorder.json` | Screen recorder runtime state |
 | `KICKOFF_MIC` | system default | Mic index or name substring for narration + screen capture audio |
 
+## Audio ingest review
+
+The tracker saves reviewable audio clips and transcript metadata in
+`audio_reviews.json` / `review_audio/`. Pending events on the Timeline page show
+a “Did you mean…” prompt; approving or editing one can add a local learned
+correction to `corrections.json`.
+
+Generate a starter benchmark manifest:
+
+```bash
+python audio_benchmark.py --print-starter
+```
+
 ## Troubleshooting
 
 - **No transcription / mic errors:** grant mic permission to your terminal and
   re-run. The tracker prints a clear message if access is denied.
+- **Soccer terms misheard:** the default is `medium.en` for better match
+  narration accuracy. If live tracking feels delayed, override it with
+  `WHISPER_MODEL=small.en` or the matching `WHISPER_MLX_MODEL` on Apple Silicon.
+  The tracker also applies a soccer correction layer before parsing, including
+  common Home/Away, action, and spoken-shirt-number fixes.
 - **Events logged but not parsed:** make sure Ollama is running
   (`ollama serve`, or launch the Ollama app).
 - **Dashboard not live-updating:** Streamlit 1.37+ uses native fragments; on

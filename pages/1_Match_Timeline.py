@@ -22,6 +22,7 @@ import streamlit.components.v1 as components
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import brand           # noqa: E402
+import audio_ingest    # noqa: E402
 import control          # noqa: E402
 import icons as IC      # noqa: E402
 import stats as S       # noqa: E402
@@ -97,10 +98,49 @@ def status_tag(e) -> str:
     return ""
 
 
+def correction_intent(event: dict, review: dict = None, updates: dict = None) -> str:
+    source = {**(event or {}), **(updates or {})}
+    return (
+        (review or {}).get("suggested_text")
+        or audio_ingest.suggested_text(source)
+        or (source.get("corrected_text") or "")
+    )
+
+
+def learn_from_review(event: dict, review: dict = None,
+                      updates: dict = None) -> None:
+    heard = ((review or {}).get("raw_text") or event.get("raw_text")
+             or (review or {}).get("corrected_text") or event.get("corrected_text"))
+    intended = correction_intent(event, review, updates)
+    audio_ingest.add_learned_correction(
+        heard, intended, source="timeline")
+
+
+def review_update_for_event(ts: str, event: dict, review: dict = None,
+                            updates: dict = None, status: str = "approved") -> None:
+    payload = {
+        "status": status,
+        "suggested_text": correction_intent(event, review, updates),
+        "parsed_event": {
+            "team": (updates or {}).get("team", event.get("team")),
+            "player": (updates or {}).get("player", event.get("player")),
+            "action": (updates or {}).get("action", event.get("action")),
+            "result": (updates or {}).get("result", event.get("result")),
+            "location": (updates or {}).get("location", event.get("location")),
+        },
+    }
+    audio_ingest.update_review_for_event(ts, payload)
+
+
 # --------------------------------------------------------------------------- #
 # Data
 # --------------------------------------------------------------------------- #
 events = S.load_events()
+audio_reviews = audio_ingest.load_reviews()
+review_by_event = {
+    r.get("event_timestamp"): r
+    for r in audio_reviews if r.get("event_timestamp")
+}
 state = control.load_control()
 home = S.team_stats(events, "Home")
 away = S.team_stats(events, "Away")
@@ -176,6 +216,25 @@ with c4:
         st.session_state["tl_png"] = TL.render_to_bytes(
             events, score=score, clock=clock)
 
+corrections = audio_ingest.load_corrections()
+if corrections:
+    with st.expander(f"Learned audio corrections ({len(corrections)})"):
+        for idx, corr in enumerate(corrections):
+            enabled = bool(corr.get("enabled", True))
+            c_on, c_txt, c_del = st.columns([1, 5, 1], vertical_alignment="center")
+            new_enabled = c_on.toggle(
+                "On", value=enabled, key=f"corr_enabled_{idx}")
+            if new_enabled != enabled:
+                audio_ingest.set_correction_enabled(idx, new_enabled)
+                st.rerun()
+            c_txt.caption(
+                f"{corr.get('heard') or '—'}  →  {corr.get('intended') or '—'}"
+                f" · used {int(corr.get('uses') or 0)}"
+            )
+            if c_del.button("Delete", key=f"corr_del_{idx}", width="stretch"):
+                audio_ingest.delete_correction(idx)
+                st.rerun()
+
 shown = [e for e in events if IC.event_kind(e) in set(kinds)]
 if not show_denied:
     shown = [e for e in shown if e.get("status") != "denied"]
@@ -218,6 +277,7 @@ for i, e in enumerate(shown):
     uid = ts or f"idx{i}"
     edit_key = f"edit_{uid}"
     confirm_key = f"confirm_del_{uid}"
+    review = review_by_event.get(ts)
 
     rail_col, body_col = st.columns([0.09, 0.91])
     with rail_col:
@@ -233,6 +293,35 @@ for i, e in enumerate(shown):
         header = f"{event_time(e)}   ·   {kind}   ·   {summary(e)}{status_tag(e)}"
 
         with st.expander(header):
+            if review and ev_status == "pending" and review.get("status") != "dismissed":
+                st.markdown("**Audio review**")
+                audio_path = review.get("audio")
+                if audio_path and os.path.exists(audio_path):
+                    st.audio(audio_path)
+                raw = review.get("raw_text") or e.get("raw_text") or ""
+                corrected = review.get("corrected_text") or e.get("corrected_text") or ""
+                suggested = review.get("suggested_text") or audio_ingest.suggested_text(e)
+                st.caption(f'Raw Whisper: "{raw or "—"}"')
+                if corrected and corrected != raw:
+                    st.caption(f'Corrected: "{corrected}"')
+                st.info(f"Did you mean: {suggested or 'an unclassified event'}?")
+                y0, y1, y2 = st.columns(3)
+                if y0.button("Yes, approve", key=f"dym_yes_{uid}",
+                             type="primary", width="stretch"):
+                    S.update_event(ts, {"status": "approved"})
+                    learn_from_review(e, review)
+                    review_update_for_event(ts, e, review, status="approved")
+                    st.session_state.pop("tl_png", None)
+                    st.toast("Event approved and correction saved when useful.")
+                    st.rerun()
+                if y1.button("Edit", key=f"dym_edit_{uid}", width="stretch"):
+                    st.session_state[edit_key] = True
+                    st.rerun()
+                if y2.button("No, dismiss", key=f"dym_no_{uid}", width="stretch"):
+                    audio_ingest.update_review_for_event(
+                        ts, {"status": "dismissed"})
+                    st.toast("Suggestion dismissed. Event remains pending.")
+                    st.rerun()
 
             # ---------------------------------------------------------------- #
             # Edit form
@@ -275,14 +364,18 @@ for i, e in enumerate(shown):
                 save_col, cancel_col = st.columns(2)
                 if save_col.button("Save & approve", key=f"save_{uid}",
                                    type="primary", width='stretch'):
-                    S.update_event(ts, {
+                    updates = {
                         "team": new_team or None,
                         "player": new_player.strip() or None,
                         "action": new_action or None,
                         "result": new_result.strip().lower() or None,
                         "location": new_location.strip() or None,
                         "status": "approved",
-                    })
+                    }
+                    S.update_event(ts, updates)
+                    learn_from_review(e, review, updates)
+                    review_update_for_event(
+                        ts, e, review, updates, status="approved")
                     st.session_state.pop(edit_key, None)
                     st.session_state.pop("tl_png", None)
                     st.toast("Event updated and approved.")
@@ -326,11 +419,15 @@ for i, e in enumerate(shown):
                     if b0.button("Approve", key=f"approve_{uid}",
                                  type="primary", width='stretch'):
                         S.update_event(ts, {"status": "approved"})
+                        learn_from_review(e, review)
+                        review_update_for_event(ts, e, review, status="approved")
                         st.session_state.pop("tl_png", None)
                         st.toast("Event approved.")
                         st.rerun()
                     if b1.button("Deny", key=f"deny_{uid}", width='stretch'):
                         S.update_event(ts, {"status": "denied"})
+                        audio_ingest.update_review_for_event(
+                            ts, {"status": "denied"})
                         st.session_state.pop("tl_png", None)
                         st.toast("Event denied and excluded from stats.")
                         st.rerun()
@@ -346,6 +443,7 @@ for i, e in enumerate(shown):
                     if b0.button("Approve", key=f"approve_{uid}",
                                  type="primary", width='stretch'):
                         S.update_event(ts, {"status": "approved"})
+                        review_update_for_event(ts, e, review, status="approved")
                         st.session_state.pop("tl_png", None)
                         st.toast("Event approved.")
                         st.rerun()
@@ -361,6 +459,8 @@ for i, e in enumerate(shown):
                     b0, b1, b2 = st.columns(3)
                     if b0.button("Deny", key=f"deny_{uid}", width='stretch'):
                         S.update_event(ts, {"status": "denied"})
+                        audio_ingest.update_review_for_event(
+                            ts, {"status": "denied"})
                         st.session_state.pop("tl_png", None)
                         st.toast("Event denied and excluded from stats.")
                         st.rerun()
@@ -378,6 +478,8 @@ for i, e in enumerate(shown):
                     if yes.button("Confirm delete", key=f"yes_{uid}",
                                   type="primary", width='stretch'):
                         if S.delete_event(ts):
+                            audio_ingest.update_review_for_event(
+                                ts, {"status": "deleted"})
                             st.toast("Event deleted.")
                         else:
                             st.toast("Couldn't find that event — it may already "

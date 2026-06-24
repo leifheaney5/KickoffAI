@@ -85,6 +85,17 @@ DEFAULT = {
     },
     "thoughts_mode": False,
     "noise_gate": 30,
+    "audio_chunking": {
+        "phrase_time_limit": 10.0,
+        "pause_threshold": 0.8,
+        "min_phrase_sec": 0.4,
+        "post_speech_padding": 0.15,
+    },
+    "calibration_test": {
+        "armed": False,
+        "requested_at": None,
+        "last_result_at": None,
+    },
     "lineups": {
         "Home": {"formation": "", "players": []},
         "Away": {"formation": "", "players": []},
@@ -107,6 +118,16 @@ def load_control() -> dict:
     merged["teams"] = {
         "home": {**DEFAULT["teams"]["home"], **saved_teams.get("home", {})},
         "away": {**DEFAULT["teams"]["away"], **saved_teams.get("away", {})},
+    }
+    saved_chunking = merged.get("audio_chunking")
+    saved_calibration = merged.get("calibration_test")
+    merged["audio_chunking"] = {
+        **DEFAULT["audio_chunking"],
+        **(saved_chunking if isinstance(saved_chunking, dict) else {}),
+    }
+    merged["calibration_test"] = {
+        **DEFAULT["calibration_test"],
+        **(saved_calibration if isinstance(saved_calibration, dict) else {}),
     }
     merged["lineups"] = _normalise_lineups(merged.get("lineups"))
     return merged
