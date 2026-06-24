@@ -111,6 +111,71 @@ def test_start_builds_screen_plus_mic_command(tmp_path, monkeypatch):
     assert saved["device"] == "2:0"
 
 
+def test_list_cameras_excludes_screen(monkeypatch):
+    monkeypatch.setattr(screen_recorder, "list_devices", lambda: (
+        [(0, "MacBook Air Camera"), (1, "Capture screen 0"), (2, "USB Capture")],
+        [(0, "Mic")],
+    ))
+    assert screen_recorder.list_cameras() == [(0, "MacBook Air Camera"),
+                                              (2, "USB Capture")]
+
+
+def test_start_builds_webcam_command(tmp_path, monkeypatch):
+    importlib.reload(screen_recorder)
+    monkeypatch.setattr(screen_recorder.sys, "platform", "darwin")
+    monkeypatch.setattr(screen_recorder, "_ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(screen_recorder, "STATE_FILE", str(tmp_path / "recorder.json"))
+    monkeypatch.setattr(screen_recorder, "RECORD_DIR", str(tmp_path / "recordings"))
+    monkeypatch.setattr(screen_recorder, "list_devices", lambda: (
+        [(0, "MacBook Air Camera"), (2, "Capture screen 0")],
+        [(0, "MacBook Air Microphone")],
+    ))
+    monkeypatch.setattr(screen_recorder.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(screen_recorder.time, "time", lambda: 100.0)
+    monkeypatch.setattr(screen_recorder.time, "strftime", lambda fmt: "20260622-210000")
+
+    launched = {}
+
+    class Proc:
+        pid = 22222
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, stdin, stdout, stderr):
+        launched["cmd"] = cmd
+        return Proc()
+
+    monkeypatch.setattr(screen_recorder.subprocess, "Popen", fake_popen)
+
+    result = screen_recorder.start(label="Cup Final", source=0)
+
+    assert result["ok"] is True
+    assert result["file"].endswith("20260622-210000-webcam-cup-final.mp4")
+    cmd = launched["cmd"]
+    # Cameras need an explicit supported framerate; no screen-only cursor flag.
+    assert cmd[cmd.index("-framerate") + 1] == "30"
+    assert "-capture_cursor" not in cmd
+    assert cmd[cmd.index("-i") + 1] == "0:0"
+
+    saved = json.loads((tmp_path / "recorder.json").read_text())
+    assert saved["kind"] == "webcam"
+    assert saved["device"] == "0:0"
+
+
+def test_start_rejects_unknown_camera(tmp_path, monkeypatch):
+    importlib.reload(screen_recorder)
+    monkeypatch.setattr(screen_recorder.sys, "platform", "darwin")
+    monkeypatch.setattr(screen_recorder, "_ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(screen_recorder, "STATE_FILE", str(tmp_path / "recorder.json"))
+    monkeypatch.setattr(screen_recorder, "list_devices", lambda: (
+        [(0, "MacBook Air Camera")], [(0, "Mic")],
+    ))
+    result = screen_recorder.start(source=7)
+    assert result["ok"] is False
+    assert "Camera #7" in result["error"]
+
+
 def test_start_returns_permission_hint_when_ffmpeg_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(screen_recorder.sys, "platform", "darwin")
     monkeypatch.setattr(screen_recorder, "_ffmpeg_path", lambda: "/usr/bin/ffmpeg")

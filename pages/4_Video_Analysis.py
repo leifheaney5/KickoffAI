@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import brand           # noqa: E402
 import control         # noqa: E402
 import icons as IC     # noqa: E402
+import screen_recorder  # noqa: E402
 
 st.set_page_config(page_title=f"{brand.NAME} — Video Analysis",
                    page_icon=brand.LOGO_TRANSPARENT, layout="wide")
@@ -334,9 +335,7 @@ def passing_map(passes, passer=None, w=520, h=340):
 def list_cameras():
     """Connected camera devices, excluding the screen-capture pseudo-device."""
     try:
-        import screen_recorder
-        vids, _ = screen_recorder.list_devices()
-        return [(i, n) for i, n in vids if "capture screen" not in n.lower()]
+        return screen_recorder.list_cameras()
     except Exception:
         return []
 
@@ -396,7 +395,8 @@ c1, c2 = st.columns([2, 1])
 with c1:
     if source_kind == "Video file":
         default_video = "soccer_test.mp4" if os.path.exists("soccer_test.mp4") else ""
-        video_path = st.text_input("Video file path", value=default_video,
+        seed = st.session_state.get("kp_va_video_path", default_video)
+        video_path = st.text_input("Video file path", value=seed,
                                    placeholder="path/to/match.mp4")
         cam_index = None
     else:
@@ -416,6 +416,71 @@ with c1:
 with c2:
     backend = st.radio("Detection backend", ["Roboflow (cloud)", "Local YOLO"],
                        horizontal=False)
+
+# Path A: record a match from a webcam to a file, then analyse that file. Live
+# analysis (Path B) is the "Webcam (live)" source above; this is the fallback —
+# capture now, analyse later, and re-run as many times as you like.
+if source_kind == "Video file" and screen_recorder.is_supported():
+    with st.expander("Record a match from your webcam (then analyse the file)"):
+        rec = screen_recorder.status()
+        rec_live = rec["recording"] and rec.get("kind") == "webcam"
+        cams = list_cameras()
+        cam_names = dict(cams)
+        if cams:
+            rec_cam = st.selectbox(
+                "Webcam", [i for i, _ in cams],
+                format_func=lambda i: f"[{i}] {cam_names.get(i, '')}",
+                disabled=rec["recording"], key="kp_va_rec_cam")
+        else:
+            rec_cam = st.number_input("Camera index", 0, 10, 0, 1,
+                                      disabled=rec["recording"], key="kp_va_rec_cam")
+        b1, b2 = st.columns(2)
+        if b1.button("●  Record webcam", type="primary",
+                     disabled=rec["recording"], use_container_width=True):
+            res = screen_recorder.start(label=match_name, source=int(rec_cam))
+            if res.get("ok"):
+                st.session_state.pop("kp_va_rec_err", None)
+            else:
+                st.session_state["kp_va_rec_err"] = res
+            st.rerun()
+        if b2.button("■  Stop", disabled=not rec_live, use_container_width=True):
+            res = screen_recorder.stop()
+            if res.get("ok") and res.get("file"):
+                st.session_state["kp_va_video_path"] = res["file"]
+                st.toast(f"Saved {os.path.basename(res['file'])} — loaded above "
+                         "for analysis.")
+            st.rerun()
+
+        if rec_live:
+            @st.fragment(run_every=1.0)
+            def _rec_chip():
+                s = screen_recorder.status()
+                if s["recording"]:
+                    st.markdown(
+                        f"<span style='color:#ff3d6e;font-weight:600'>● REC</span> "
+                        f"<span style='font-variant-numeric:tabular-nums'>"
+                        f"{control.fmt_clock(s['elapsed'])}</span> · "
+                        f"{os.path.basename(s['file'] or '')}",
+                        unsafe_allow_html=True)
+            _rec_chip()
+
+        err = st.session_state.get("kp_va_rec_err")
+        if err:
+            st.error(err.get("error", "Could not start the webcam recording."))
+            if err.get("detail"):
+                with st.expander("ffmpeg output"):
+                    st.code(err["detail"])
+
+        webcam_recs = [r for r in screen_recorder.list_recordings()
+                       if "webcam" in r["name"].lower()]
+        if webcam_recs:
+            st.caption("Recent webcam recordings:")
+            for r in webcam_recs[:6]:
+                lc, rc = st.columns([4, 1], vertical_alignment="center")
+                lc.caption(f"{r['name']} · {r['size'] / (1024 * 1024):.0f} MB")
+                if rc.button("Analyse", key="kp_va_load_" + r["name"]):
+                    st.session_state["kp_va_video_path"] = r["path"]
+                    st.rerun()
 
 env_key = os.environ.get("ROBOFLOW_API_KEY", "")
 roboflow_model = "football-players-detection-3zvbc/12"
