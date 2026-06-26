@@ -17,13 +17,13 @@ import csv
 import io
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 
 import control
 import insights as IN
 import stats as S
-import timeline_image as TL
 
 REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "exports")
 
@@ -213,17 +213,6 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     L.append(f"FINAL SCORE   HOME {home['Goals']}  -  {away['Goals']} AWAY")
     L.append("")
 
-    # Key moments (auto-tagged from events + momentum)
-    moments = IN.key_moments(events)
-    if moments:
-        rule("-")
-        L.append("KEY MOMENTS")
-        rule("-")
-        for m in moments:
-            L.append(f"  {m['mmss']:>6}  {m['label']}")
-        L.append("  (Momentum chart saved alongside this report.)")
-        L.append("")
-
     # Starting lineups (optional)
     if control.has_lineups(lineups):
         hl = _roster_lines(lineups, "Home")
@@ -271,16 +260,6 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         L.append(f"  {leader} finished the stronger side.")
     L.append("")
 
-    # Substitutions
-    if data["subs"]:
-        rule("-")
-        L.append("SUBSTITUTIONS")
-        rule("-")
-        for e in data["subs"]:
-            who = e.get("player") or "unknown"
-            L.append(f"  {_event_time(e):>8}  {e.get('team') or '-':<5}  {who}")
-        L.append("")
-
     # Post-match summary
     if summary:
         rule("-")
@@ -324,7 +303,7 @@ def _pdf_safe(s) -> str:
 # --------------------------------------------------------------------------- #
 # PDF report
 # --------------------------------------------------------------------------- #
-def build_pdf(events, data, summary, clock, path, timeline_png=None,
+def build_pdf(events, data, summary, clock, path,
               match_name="", lineups=None, notes=None, momentum_png=None,
               home_logo=None, away_logo=None):
     from fpdf import FPDF
@@ -510,28 +489,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         except Exception:
             pass
 
-    # ---- Key moments (boxed) ---------------------------------------------- #
-    moments = IN.key_moments(events)
-    if moments:
-        section("Key Moments")
-        y0 = pdf.get_y()
-        fill = False
-        for m in moments:
-            pdf.set_x(lm)
-            pdf.set_fill_color(*(SHADE if fill else (255, 255, 255)))
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*MUTED)
-            pdf.cell(epw * 0.14, 6, _pdf_safe(m["mmss"]), align="C", fill=True)
-            col = (HOME_RGB if m.get("team") == "Home"
-                   else AWAY_RGB if m.get("team") == "Away" else NAVY_RGB)
-            pdf.set_font("Helvetica", "", 9)
-            pdf.set_text_color(*col)
-            pdf.cell(epw * 0.86, 6, _pdf_safe(m["label"]), align="L", fill=True,
-                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            fill = not fill
-        frame(y0)
-        pdf.ln(3)
-
     # ---- Starting lineups (optional) -------------------------------------- #
     if control.has_lineups(lineups):
         hl = _roster_lines(lineups, "Home")
@@ -626,15 +583,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     frame(y0)
     pdf.ln(3)
 
-    # ---- Substitutions (optional) ----------------------------------------- #
-    if data["subs"]:
-        section("Substitutions")
-        for e in data["subs"]:
-            who = e.get("player") or "unknown"
-            text(f"  {_event_time(e)}   {e.get('team') or '-'}   {who}",
-                 9, "", INK, h=5)
-        pdf.ln(2)
-
     # ---- Post-match summary (optional) ------------------------------------ #
     if summary:
         section("Post-Match Summary")
@@ -658,22 +606,6 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
                            new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
 
-    # ---- Visual timeline image on its own page ---------------------------- #
-    if timeline_png and os.path.exists(timeline_png):
-        from PIL import Image
-        pdf.add_page()
-        section("Visual Timeline")
-        with Image.open(timeline_png) as im:
-            iw, ih = im.size
-        aspect = iw / ih
-        max_w, max_h = epw, pdf.h - pdf.get_y() - pdf.b_margin
-        w = max_w
-        h = w / aspect
-        if h > max_h:
-            h = max_h
-            w = h * aspect
-        pdf.image(timeline_png, x=lm + (epw - w) / 2, y=pdf.get_y(), w=w, h=h)
-
     pdf.output(path)
 
 
@@ -690,6 +622,23 @@ def _default_logo(side: str):
         if os.path.exists(p):
             return p
     return None
+
+
+def _slugify(name: str) -> str:
+    """'Hub City FC vs Ristozi FC' -> 'Hub_City_FC_vs_Ristozi_FC'."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(name or "")).strip("_")
+
+
+def _match_date(events) -> str:
+    """Match date (YYYY-MM-DD) from the earliest event, else today."""
+    for e in events:
+        ts = e.get("timestamp")
+        if ts:
+            try:
+                return datetime.fromisoformat(ts).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def generate(events=None, summary="", clock="", out_dir=None,
@@ -711,22 +660,16 @@ def generate(events=None, summary="", clock="", out_dir=None,
         notes = control.load_notes()
 
     data = _collect(events)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Intuitive filename base: teams + match date, e.g.
+    # "Hub_City_FC_vs_Ristozi_FC_2026-06-24".
+    base = f"{_slugify(match_name) or 'match'}_{_match_date(events)}"
 
-    txt_path = os.path.join(out_dir, f"match_report_{ts}.txt")
-    pdf_path = os.path.join(out_dir, f"match_report_{ts}.pdf")
-    png_path = os.path.join(out_dir, f"match_timeline_{ts}.png")
-    mom_path = os.path.join(out_dir, f"match_momentum_{ts}.png")
-    events_csv_path = os.path.join(out_dir, f"match_events_{ts}.csv")
-    team_csv_path = os.path.join(out_dir, f"match_team_stats_{ts}.csv")
-    player_csv_path = os.path.join(out_dir, f"match_player_stats_{ts}.csv")
-
-    # Render the visual timeline image (embedded in the PDF + saved alongside).
-    score = (data["home"]["Goals"], data["away"]["Goals"])
-    try:
-        TL.render(events, score=score, clock=clock, path=png_path)
-    except Exception:
-        png_path = None
+    txt_path = os.path.join(out_dir, f"{base}.txt")
+    pdf_path = os.path.join(out_dir, f"{base}.pdf")
+    mom_path = os.path.join(out_dir, f"{base}_momentum.png")
+    events_csv_path = os.path.join(out_dir, f"{base}_events.csv")
+    team_csv_path = os.path.join(out_dir, f"{base}_team_stats.csv")
+    player_csv_path = os.path.join(out_dir, f"{base}_player_stats.csv")
 
     # Render the momentum graph (embedded in the PDF + saved alongside).
     try:
@@ -738,7 +681,7 @@ def generate(events=None, summary="", clock="", out_dir=None,
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock, match_name, lineups,
                             notes))
-    build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
+    build_pdf(events, data, summary, clock, pdf_path,
               match_name=match_name, lineups=lineups, notes=notes,
               momentum_png=mom_path, home_logo=home_logo, away_logo=away_logo)
 
@@ -756,12 +699,10 @@ def generate(events=None, summary="", clock="", out_dir=None,
         "events_csv": events_csv_path, "team_csv": team_csv_path,
         "players_csv": player_csv_path,
     }
-    if png_path:
-        result["image"] = png_path
     if mom_path and os.path.exists(mom_path):
         result["momentum"] = mom_path
     if archive and os.path.exists(data_file):
-        archive_path = os.path.join(out_dir, f"match_data_{ts}.json")
+        archive_path = os.path.join(out_dir, f"{base}_data.json")
         shutil.copyfile(data_file, archive_path)
         result["data"] = archive_path
     return result

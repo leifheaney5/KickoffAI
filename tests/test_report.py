@@ -72,12 +72,13 @@ def test_player_of_match_none_without_positive_contributions():
     assert report.player_of_match(players) is None
 
 
-def test_build_text_has_key_moments_and_by_half(sample_events):
+def test_build_text_has_by_half_and_contact(sample_events):
     data = report._collect(sample_events)
     txt = report.build_text(sample_events, data, "Good.", "31:00", "Demo")
-    assert "KEY MOMENTS" in txt
     assert "BY HALF" in txt
     assert "leif@leifheaney.com" in txt  # contact in the header
+    assert "KEY MOMENTS" not in txt      # removed
+    assert "SUBSTITUTIONS" not in txt    # removed
     # Per-half goals are bucketed by the stamped clock (the goal was at 05:40).
     assert data["home_halves"]["1st"]["Goals"] == 1
 
@@ -121,7 +122,17 @@ def test_generate_produces_all_artifacts(sample_events, tmp_path):
     paths = report.generate(events=sample_events, summary="s", clock="31:00",
                             out_dir=str(tmp_path), archive=False,
                             match_name="Test FC vs Demo")
-    for key in ("txt", "pdf", "events_csv", "team_csv", "players_csv", "image"):
+    for key in ("txt", "pdf", "events_csv", "team_csv", "players_csv",
+                "momentum"):
         assert key in paths, f"missing {key}"
         assert os.path.exists(paths[key]), f"file missing: {paths[key]}"
         assert os.path.getsize(paths[key]) > 0
+
+
+def test_generate_filename_uses_teams_and_date(sample_events, tmp_path):
+    paths = report.generate(events=sample_events, summary="s", clock="31:00",
+                            out_dir=str(tmp_path), archive=False,
+                            match_name="Hub City FC vs Ristozi FC")
+    # Earliest sample event is 2026-06-10; name is slugified into the filename.
+    assert os.path.basename(paths["pdf"]) == \
+        "Hub_City_FC_vs_Ristozi_FC_2026-06-10.pdf"

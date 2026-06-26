@@ -23,6 +23,19 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.10.1] - 2026-06-25
+
+### Changed
+
+- Report files are now named by teams + match date (e.g.
+  `Hub_City_FC_vs_Ristozi_FC_2026-06-24.pdf`) instead of a generation
+  timestamp, for intuitive lookup.
+
+### Removed
+
+- Further trimmed the report: removed the Key Moments, Substitutions, and
+  Visual Timeline sections.
+
 ## [1.10.0] - 2026-06-25
 
 ### Changed
