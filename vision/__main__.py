@@ -92,6 +92,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--pitch-points", type=str, default=None,
         help="Matching four pitch 'x,y' pairs in metres (default: corners).",
     )
+    p.add_argument(
+        "--possession-radius", type=float, default=None,
+        help="Override possession_radius_m. For UNCALIBRATED runs (no --points), "
+        "coordinates are normalised 0..100 image space, so the default 1.5 'm' is "
+        "far too tight; try 4-10 to make possession/passing fire.",
+    )
+    p.add_argument(
+        "--min-pass-distance", type=float, default=None,
+        help="Override min_pass_distance_m (same image-space caveat as "
+        "--possession-radius for uncalibrated runs).",
+    )
+    p.add_argument(
+        "--possession-frames", type=int, default=None,
+        help="Override possession_frames (consecutive same-track frames to "
+        "confirm a holder). The default 15 never survives a panning camera's "
+        "track-id churn; 3-5 is realistic for Veo-style auto-follow footage.",
+    )
     p.add_argument("--no-ocr", action="store_true", help="Disable jersey OCR.")
     p.add_argument("--gpu-ocr", action="store_true", help="Use GPU for OCR.")
     p.add_argument("--show", action="store_true", help="Show a debug overlay.")
@@ -105,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Team K-Means clusters torso colours and can hit degenerate (near-empty)
+    # crops, which numpy surfaces as a flood of divide-by-zero / overflow
+    # RuntimeWarnings in matmul. They are harmless to the result but bury the
+    # progress output, so silence them for the CLI run.
+    import warnings
+
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
 
     config = PipelineConfig(
         model_path=args.model,
@@ -121,6 +146,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         show=args.show,
         max_seconds=args.max_seconds,
     )
+    # Uncalibrated footage (no --points) emits 0..100 image-space coordinates,
+    # where the metric possession/passing thresholds are meaningless; let the
+    # caller widen them so the heuristics actually fire.
+    if args.possession_radius is not None:
+        config.possession_radius_m = args.possession_radius
+    if args.min_pass_distance is not None:
+        config.min_pass_distance_m = args.min_pass_distance
+    if args.possession_frames is not None:
+        config.possession_frames = max(1, args.possession_frames)
 
     homography = None
     image_points = _parse_points(args.points)
