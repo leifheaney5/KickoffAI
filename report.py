@@ -59,12 +59,18 @@ def _event_summary(e: dict) -> str:
     return " / ".join(parts) if parts else f'"{e.get("raw_text", "")}"'
 
 
+# Compact subset of stats worth splitting per half (keeps the table readable).
+HALF_STAT_KEYS = ["Goals", "Shots", "On Target", "Corners", "Fouls"]
+
+
 def _collect(events):
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
     return {
         "home": home,
         "away": away,
+        "home_halves": S.team_stats_by_half(events, "Home"),
+        "away_halves": S.team_stats_by_half(events, "Away"),
         "players": S.player_stats(events),
         "subs": [e for e in events if e.get("action") == "substitution"],
     }
@@ -73,6 +79,45 @@ def _collect(events):
 def _conversion(team: dict) -> int:
     """Goals-per-shot as a percentage (0 when no shots were taken)."""
     return round(100 * team["Goals"] / team["Shots"]) if team["Shots"] else 0
+
+
+def scoring_summary(events) -> list:
+    """Goals in match order: [{time, team, player}] (denied goals excluded)."""
+    out = []
+    for e in events:
+        if e.get("status") == "denied":
+            continue
+        if e.get("action") == "goal" or (e.get("result") or "").lower() == "scored":
+            out.append({
+                "time": _event_time(e),
+                "team": e.get("team") or "-",
+                "player": e.get("player") or "",
+            })
+    return out
+
+
+def _potm_score(p: dict) -> float:
+    """Heuristic standout-performer score from a player's stat block."""
+    return (p.get("Goals", 0) * 3.0 + p.get("On Target", 0) * 1.5
+            + p.get("Shots", 0) * 0.5 + p.get("Saves", 0) * 1.0
+            + p.get("Tackles", 0) * 0.8
+            - p.get("Yellow Cards", 0) * 1.0 - p.get("Red Cards", 0) * 3.0)
+
+
+def player_of_match(players: dict):
+    """Auto-pick the standout player as (name, stat_block, score), or None.
+
+    Returns None when there are no players or no one has a positive score
+    (e.g. only passes logged), so callers can simply skip the section.
+    """
+    if not players:
+        return None
+    name, p = max(players.items(),
+                  key=lambda kv: (_potm_score(kv[1]), kv[1].get("Events", 0)))
+    score = _potm_score(p)
+    if score <= 0:
+        return None
+    return name, p, round(score, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -167,6 +212,17 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     L.append(f"FINAL SCORE   HOME {home['Goals']}  -  {away['Goals']} AWAY")
     L.append("")
 
+    # Scoring summary (goalscorers with minutes)
+    goals = scoring_summary(events)
+    if goals:
+        rule("-")
+        L.append("SCORING SUMMARY")
+        rule("-")
+        for g in goals:
+            who = f"  {g['player']}" if g["player"] else ""
+            L.append(f"  {g['time']:>8}  {g['team']:<5}{who}")
+        L.append("")
+
     # Starting lineups (optional)
     if control.has_lineups(lineups):
         hl = _roster_lines(lineups, "Home")
@@ -189,18 +245,52 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         L.append(f"{str(home[k]):>10}   {k:^18}   {str(away[k]):<10}")
     L.append("")
 
+    # Per-half breakdown (key stats only)
+    h1, h2 = data["home_halves"], data["away_halves"]
+    rule("-")
+    L.append("BY HALF")
+    rule("-")
+    L.append(f"{'':<14}{'1st (H-A)':>11}{'2nd (H-A)':>13}")
+    for k in HALF_STAT_KEYS:
+        first = f"{h1['1st'][k]}-{h2['1st'][k]}"
+        second = f"{h1['2nd'][k]}-{h2['2nd'][k]}"
+        L.append(f"{k:<14}{first:>11}{second:>13}")
+    L.append("")
+
     # Efficiency & possession
     hp, ap = S.possession(home, away)
     rule("-")
     L.append("EFFICIENCY & POSSESSION")
     rule("-")
-    L.append(f"{f'{hp}%':>10}   {'Possession':^18}   {f'{ap}%':<10}")
+    L.append(f"{f'{hp}%':>10}   {'Possession (est)':^18}   {f'{ap}%':<10}")
     L.append(f"{f'{_conversion(home)}%':>10}   {'Shot Conversion':^18}   "
              f"{f'{_conversion(away)}%':<10}")
-    leader, strength = IN.momentum_leader(events)
+    leader, _strength = IN.momentum_leader(events)
     if leader:
-        L.append(f"  Final momentum favours {leader} (strength {strength:.1f}).")
+        L.append(f"  {leader} finished the stronger side.")
     L.append("")
+
+    # Player of the match (auto-selected)
+    potm = player_of_match(data["players"])
+    if potm:
+        name, pp, _score = potm
+        rule("-")
+        L.append("PLAYER OF THE MATCH")
+        rule("-")
+        line = f"  {name} ({pp.get('Team') or '-'})"
+        bits = []
+        if pp.get("Goals"):
+            bits.append(f"{pp['Goals']} goal{'s' if pp['Goals'] != 1 else ''}")
+        if pp.get("On Target"):
+            bits.append(f"{pp['On Target']} on target")
+        if pp.get("Saves"):
+            bits.append(f"{pp['Saves']} saves")
+        if pp.get("Tackles"):
+            bits.append(f"{pp['Tackles']} tackles")
+        if bits:
+            line += " - " + ", ".join(bits)
+        L.append(line)
+        L.append("")
 
     # Player stats
     players = data["players"]
@@ -341,8 +431,25 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.ln(6)
 
+    # Scoring summary (goalscorers with minutes)
+    goals = scoring_summary(events)
+    if goals:
+        text("Scoring Summary", 11, "B", INK, h=7)
+        pdf.set_font("Helvetica", "", 9)
+        for g in goals:
+            pdf.set_x(pdf.l_margin)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(epw * 0.14, 5, _pdf_safe(g["time"]), align="L")
+            pdf.set_text_color(*(HOME_RGB if g["team"] == "Home"
+                                 else AWAY_RGB if g["team"] == "Away" else MUTED))
+            pdf.cell(epw * 0.12, 5, _pdf_safe(g["team"]), align="L")
+            pdf.set_text_color(*INK)
+            pdf.multi_cell(epw * 0.74, 5, _pdf_safe(g["player"] or "-"),
+                           new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(2)
+
     # Possession bar
-    text("Possession", 11, "B", INK, h=7)
+    text("Possession (est.)", 11, "B", INK, h=7)
     bx, by, bh = pdf.l_margin, pdf.get_y(), 7
     hw = epw * (hp / 100.0)
     pdf.set_fill_color(*HOME_RGB)
@@ -357,11 +464,29 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     pdf.ln(bh + 4)
 
     # Efficiency line: conversion + momentum
-    leader, strength = IN.momentum_leader(events)
-    momentum = f"{leader} +{strength:.1f}" if leader else "Even"
+    leader, _strength = IN.momentum_leader(events)
+    momentum = f"{leader} finished stronger" if leader else "Even"
     text(f"Shot conversion   Home {_conversion(home)}%  /  Away "
          f"{_conversion(away)}%        Momentum   {momentum}", 9, "", MUTED, h=6)
     pdf.ln(2)
+
+    # Player of the match (auto-selected)
+    potm = player_of_match(data["players"])
+    if potm:
+        name, pp, _score = potm
+        bits = []
+        if pp.get("Goals"):
+            bits.append(f"{pp['Goals']} G")
+        if pp.get("On Target"):
+            bits.append(f"{pp['On Target']} on target")
+        if pp.get("Saves"):
+            bits.append(f"{pp['Saves']} saves")
+        if pp.get("Tackles"):
+            bits.append(f"{pp['Tackles']} Tk")
+        tail = ("  -  " + ", ".join(bits)) if bits else ""
+        text("Player of the Match", 11, "B", INK, h=7)
+        text(f"{name} ({pp.get('Team') or '-'}){tail}", 10, "", INK, h=6)
+        pdf.ln(2)
 
     # Starting lineups (optional)
     if control.has_lineups(lineups):
@@ -406,6 +531,26 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
     stat_row("HOME", "", "AWAY", header=True)
     for k in S.STAT_KEYS:
         stat_row(k, str(home[k]), str(away[k]))
+    pdf.ln(4)
+
+    # Per-half breakdown (key stats only): Stat | 1H H-A | 2H H-A
+    h1, h2 = data["home_halves"], data["away_halves"]
+    text("By Half", 13, "B", INK, h=8)
+    half_cols = [("Stat", 0.40), ("1st Half (H-A)", 0.30), ("2nd Half (H-A)", 0.30)]
+    pdf.set_x(pdf.l_margin)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*INK)
+    for label, frac in half_cols:
+        pdf.cell(epw * frac, 6, label, border="B", align="C")
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "", 9)
+    for k in HALF_STAT_KEYS:
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(epw * 0.40, 6, _pdf_safe(k), border="B", align="L")
+        pdf.cell(epw * 0.30, 6, f"{h1['1st'][k]}-{h2['1st'][k]}",
+                 border="B", align="C")
+        pdf.cell(epw * 0.30, 6, f"{h1['2nd'][k]}-{h2['2nd'][k]}",
+                 border="B", align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(4)
 
     # Player stats table

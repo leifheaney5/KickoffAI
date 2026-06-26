@@ -48,6 +48,40 @@ def test_build_text_has_efficiency_block(sample_events):
     assert "Shot Conversion" in txt
 
 
+def test_scoring_summary_lists_goals_excludes_denied(sample_events):
+    goals = report.scoring_summary(sample_events)
+    # One approved goal by #10; the denied goal must be excluded.
+    assert len(goals) == 1
+    assert goals[0]["team"] == "Home"
+    assert goals[0]["player"] == "#10"
+
+
+def test_player_of_match_picks_scorer(sample_events):
+    data = report._collect(sample_events)
+    potm = report.player_of_match(data["players"])
+    assert potm is not None
+    name, block, score = potm
+    assert name == "#10"  # goal + on-target shot beats a yellow-carded passer
+    assert score > 0
+
+
+def test_player_of_match_none_without_positive_contributions():
+    players = {"#7": {"Team": "Away", "Events": 2, "Goals": 0, "On Target": 0,
+                      "Shots": 0, "Saves": 0, "Tackles": 0,
+                      "Yellow Cards": 1, "Red Cards": 0}}
+    assert report.player_of_match(players) is None
+
+
+def test_build_text_has_scoring_half_and_potm(sample_events):
+    data = report._collect(sample_events)
+    txt = report.build_text(sample_events, data, "Good.", "31:00", "Demo")
+    assert "SCORING SUMMARY" in txt
+    assert "BY HALF" in txt
+    assert "PLAYER OF THE MATCH" in txt
+    # Per-half goals are bucketed by the stamped clock (the goal was at 05:40).
+    assert data["home_halves"]["1st"]["Goals"] == 1
+
+
 def test_pdf_safe_transliterates():
     assert report._pdf_safe("Round — 9 “x”") == 'Round - 9 "x"'
 

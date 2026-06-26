@@ -23,6 +23,25 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.8.0] - 2026-06-24
+
+### Added
+
+- Post-match report now includes a **scoring summary** (goalscorers with the
+  minute, denied goals excluded), an auto-selected **Player of the Match**
+  (heuristic from goals, shots on target, saves, tackles, minus cards), and a
+  **per-half breakdown** of the key stats (goals, shots, on target, corners,
+  fouls). All three appear in both the plain-text and PDF reports.
+- New shared helpers `stats.event_half` and `stats.team_stats_by_half` derive
+  first/second-half splits from the stamped match clock.
+
+### Changed
+
+- Possession in the report is now labelled "(est.)" to make clear it is
+  approximated from on-ball action share rather than measured.
+- The opaque "momentum strength" number is replaced with a plain-language note
+  ("Home/Away finished the stronger side").
+
 ## [1.7.0] - 2026-06-24
 
 ### Changed
