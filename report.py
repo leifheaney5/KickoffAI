@@ -24,6 +24,7 @@ from datetime import datetime
 import control
 import insights as IN
 import stats as S
+import timeline_image as TL
 
 REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "exports")
 
@@ -666,10 +667,19 @@ def generate(events=None, summary="", clock="", out_dir=None,
 
     txt_path = os.path.join(out_dir, f"{base}.txt")
     pdf_path = os.path.join(out_dir, f"{base}.pdf")
+    png_path = os.path.join(out_dir, f"{base}_timeline.png")
     mom_path = os.path.join(out_dir, f"{base}_momentum.png")
     events_csv_path = os.path.join(out_dir, f"{base}_events.csv")
     team_csv_path = os.path.join(out_dir, f"{base}_team_stats.csv")
     player_csv_path = os.path.join(out_dir, f"{base}_player_stats.csv")
+
+    # Render the visual-timeline image as a standalone artifact (used by the
+    # match library + downloads). It is intentionally NOT embedded in the PDF.
+    score = (data["home"]["Goals"], data["away"]["Goals"])
+    try:
+        TL.render(events, score=score, clock=clock, path=png_path)
+    except Exception:
+        png_path = None
 
     # Render the momentum graph (embedded in the PDF + saved alongside).
     try:
@@ -699,6 +709,8 @@ def generate(events=None, summary="", clock="", out_dir=None,
         "events_csv": events_csv_path, "team_csv": team_csv_path,
         "players_csv": player_csv_path,
     }
+    if png_path and os.path.exists(png_path):
+        result["image"] = png_path
     if mom_path and os.path.exists(mom_path):
         result["momentum"] = mom_path
     if archive and os.path.exists(data_file):

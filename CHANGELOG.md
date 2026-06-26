@@ -23,6 +23,22 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.11.0] - 2026-06-26
+
+### Changed
+
+- Merged the post-match report upgrades, the report-generation skills, and the
+  CV uncalibrated possession tuning flags into `main`. The `analyze-video` skill
+  is now functional on `main` (the `--possession-radius` / `--possession-frames`
+  flags are present).
+
+### Fixed
+
+- The visual-timeline image is generated again as a standalone artifact (still
+  archived into the match library and offered as a download); it was removed in
+  1.10.1 from the report PDF only, which inadvertently dropped it from the
+  library archive too.
+
 ## [1.10.1] - 2026-06-25
 
 ### Changed
