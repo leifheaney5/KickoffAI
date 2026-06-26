@@ -48,6 +48,63 @@ def test_build_text_has_efficiency_block(sample_events):
     assert "Shot Conversion" in txt
 
 
+def test_scoring_summary_lists_goals_excludes_denied(sample_events):
+    goals = report.scoring_summary(sample_events)
+    # One approved goal by #10; the denied goal must be excluded.
+    assert len(goals) == 1
+    assert goals[0]["team"] == "Home"
+    assert goals[0]["player"] == "#10"
+
+
+def test_player_of_match_picks_scorer(sample_events):
+    data = report._collect(sample_events)
+    potm = report.player_of_match(data["players"])
+    assert potm is not None
+    name, block, score = potm
+    assert name == "#10"  # goal + on-target shot beats a yellow-carded passer
+    assert score > 0
+
+
+def test_player_of_match_none_without_positive_contributions():
+    players = {"#7": {"Team": "Away", "Events": 2, "Goals": 0, "On Target": 0,
+                      "Shots": 0, "Saves": 0, "Tackles": 0,
+                      "Yellow Cards": 1, "Red Cards": 0}}
+    assert report.player_of_match(players) is None
+
+
+def test_build_text_has_by_half_and_contact(sample_events):
+    data = report._collect(sample_events)
+    txt = report.build_text(sample_events, data, "Good.", "31:00", "Demo")
+    assert "BY HALF" in txt
+    assert "leif@leifheaney.com" in txt  # contact in the header
+    assert "KEY MOMENTS" not in txt      # removed
+    assert "SUBSTITUTIONS" not in txt    # removed
+    # Per-half goals are bucketed by the stamped clock (the goal was at 05:40).
+    assert data["home_halves"]["1st"]["Goals"] == 1
+
+
+def test_key_moments_tags_goals_and_swings(sample_events):
+    import insights as IN
+    moments = IN.key_moments(sample_events)
+    types = {m["type"] for m in moments}
+    assert "goal" in types  # the approved Home goal is tagged
+    # sorted by minute and each carries a label + source
+    minutes = [m["minute"] for m in moments]
+    assert minutes == sorted(minutes)
+    assert all(m["label"] and m["source"] in ("audio", "momentum")
+               for m in moments)
+
+
+def test_generate_embeds_momentum(sample_events, tmp_path):
+    paths = report.generate(events=sample_events, summary="s", clock="90:00",
+                            out_dir=str(tmp_path), archive=False,
+                            match_name="Demo")
+    assert "momentum" in paths and os.path.exists(paths["momentum"])
+    txt = open(paths["txt"]).read()
+    assert "VISION ANALYSIS" not in txt  # CV section removed
+    assert "EVENT TIMELINE" not in txt   # event timeline removed
+
+
 def test_pdf_safe_transliterates():
     assert report._pdf_safe("Round — 9 “x”") == 'Round - 9 "x"'
 
@@ -65,7 +122,17 @@ def test_generate_produces_all_artifacts(sample_events, tmp_path):
     paths = report.generate(events=sample_events, summary="s", clock="31:00",
                             out_dir=str(tmp_path), archive=False,
                             match_name="Test FC vs Demo")
-    for key in ("txt", "pdf", "events_csv", "team_csv", "players_csv", "image"):
+    for key in ("txt", "pdf", "events_csv", "team_csv", "players_csv",
+                "momentum"):
         assert key in paths, f"missing {key}"
         assert os.path.exists(paths[key]), f"file missing: {paths[key]}"
         assert os.path.getsize(paths[key]) > 0
+
+
+def test_generate_filename_uses_teams_and_date(sample_events, tmp_path):
+    paths = report.generate(events=sample_events, summary="s", clock="31:00",
+                            out_dir=str(tmp_path), archive=False,
+                            match_name="Hub City FC vs Ristozi FC")
+    # Earliest sample event is 2026-06-10; name is slugified into the filename.
+    assert os.path.basename(paths["pdf"]) == \
+        "Hub_City_FC_vs_Ristozi_FC_2026-06-10.pdf"

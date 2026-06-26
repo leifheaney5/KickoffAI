@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from collections import Counter
 
@@ -146,6 +147,39 @@ def aggregate(rows: list) -> dict:
 def team_stats(events: list, team: str) -> dict:
     active = [e for e in events if e.get("status") != "denied"]
     return aggregate([e for e in active if e.get("team") == team])
+
+
+def event_half(e: dict) -> str | None:
+    """Best-effort '1st'/'2nd' half label from the stamped match clock.
+
+    First-half stoppage reads like '45:00 +MM:SS', while the regular second-half
+    clock runs 45:00->90:00, so a bare minute >= 45 means the second half.
+    Returns None when the event carries no usable clock reading.
+    """
+    mt = (e.get("match_time") or "").strip()
+    if not mt:
+        return None
+    if mt.startswith("45:00 +"):
+        return "1st"
+    m = re.match(r"(\d+):(\d+)", mt)
+    if not m:
+        return None
+    minute = int(m.group(1)) + int(m.group(2)) / 60.0
+    return "2nd" if minute >= 45 else "1st"
+
+
+def team_stats_by_half(events: list, team: str) -> dict:
+    """{'1st': stat_block, '2nd': stat_block} for one team.
+
+    Events without a determinable half are omitted, so the two halves may not
+    sum to the full-match totals when clock readings are missing.
+    """
+    active = [e for e in events
+             if e.get("status") != "denied" and e.get("team") == team]
+    return {
+        "1st": aggregate([e for e in active if event_half(e) == "1st"]),
+        "2nd": aggregate([e for e in active if event_half(e) == "2nd"]),
+    }
 
 
 def player_stats(events: list) -> dict:

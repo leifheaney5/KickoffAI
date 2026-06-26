@@ -17,15 +17,15 @@ import csv
 import io
 import json
 import os
+import re
 import shutil
 from datetime import datetime
 
 import control
 import insights as IN
 import stats as S
-import timeline_image as TL
 
-REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "reports")
+REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "exports")
 
 HOME_RGB = (30, 123, 255)   # Pulse Blue (brand)
 AWAY_RGB = (220, 38, 38)    # red
@@ -59,12 +59,18 @@ def _event_summary(e: dict) -> str:
     return " / ".join(parts) if parts else f'"{e.get("raw_text", "")}"'
 
 
+# Compact subset of stats worth splitting per half (keeps the table readable).
+HALF_STAT_KEYS = ["Goals", "Shots", "On Target", "Corners", "Fouls"]
+
+
 def _collect(events):
     home = S.team_stats(events, "Home")
     away = S.team_stats(events, "Away")
     return {
         "home": home,
         "away": away,
+        "home_halves": S.team_stats_by_half(events, "Home"),
+        "away_halves": S.team_stats_by_half(events, "Away"),
         "players": S.player_stats(events),
         "subs": [e for e in events if e.get("action") == "substitution"],
     }
@@ -73,6 +79,45 @@ def _collect(events):
 def _conversion(team: dict) -> int:
     """Goals-per-shot as a percentage (0 when no shots were taken)."""
     return round(100 * team["Goals"] / team["Shots"]) if team["Shots"] else 0
+
+
+def scoring_summary(events) -> list:
+    """Goals in match order: [{time, team, player}] (denied goals excluded)."""
+    out = []
+    for e in events:
+        if e.get("status") == "denied":
+            continue
+        if e.get("action") == "goal" or (e.get("result") or "").lower() == "scored":
+            out.append({
+                "time": _event_time(e),
+                "team": e.get("team") or "-",
+                "player": e.get("player") or "",
+            })
+    return out
+
+
+def _potm_score(p: dict) -> float:
+    """Heuristic standout-performer score from a player's stat block."""
+    return (p.get("Goals", 0) * 3.0 + p.get("On Target", 0) * 1.5
+            + p.get("Shots", 0) * 0.5 + p.get("Saves", 0) * 1.0
+            + p.get("Tackles", 0) * 0.8
+            - p.get("Yellow Cards", 0) * 1.0 - p.get("Red Cards", 0) * 3.0)
+
+
+def player_of_match(players: dict):
+    """Auto-pick the standout player as (name, stat_block, score), or None.
+
+    Returns None when there are no players or no one has a positive score
+    (e.g. only passes logged), so callers can simply skip the section.
+    """
+    if not players:
+        return None
+    name, p = max(players.items(),
+                  key=lambda kv: (_potm_score(kv[1]), kv[1].get("Events", 0)))
+    score = _potm_score(p)
+    if score <= 0:
+        return None
+    return name, p, round(score, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,6 +205,7 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         L.append(match_name.center(w))
         L.append("")
     L.append(f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    L.append("Contact   : leif@leifheaney.com")
     if clock:
         L.append(f"Match clock: {clock}")
     L.append(f"Events    : {len(events)}")
@@ -189,47 +235,30 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         L.append(f"{str(home[k]):>10}   {k:^18}   {str(away[k]):<10}")
     L.append("")
 
+    # Per-half breakdown (key stats only) — explicit Home/Away per half
+    h1, h2 = data["home_halves"], data["away_halves"]
+    rule("-")
+    L.append("BY HALF")
+    rule("-")
+    L.append(f"{'':<12}{'1st Half':^12}{'':<3}{'2nd Half':^12}")
+    L.append(f"{'':<12}{'Home':>6}{'Away':>6}{'':<3}{'Home':>6}{'Away':>6}")
+    for k in HALF_STAT_KEYS:
+        L.append(f"{k:<12}{h1['1st'][k]:>6}{h2['1st'][k]:>6}{'':<3}"
+                 f"{h1['2nd'][k]:>6}{h2['2nd'][k]:>6}")
+    L.append("")
+
     # Efficiency & possession
     hp, ap = S.possession(home, away)
     rule("-")
     L.append("EFFICIENCY & POSSESSION")
     rule("-")
-    L.append(f"{f'{hp}%':>10}   {'Possession':^18}   {f'{ap}%':<10}")
+    L.append(f"{f'{hp}%':>10}   {'Possession (est)':^18}   {f'{ap}%':<10}")
     L.append(f"{f'{_conversion(home)}%':>10}   {'Shot Conversion':^18}   "
              f"{f'{_conversion(away)}%':<10}")
-    leader, strength = IN.momentum_leader(events)
+    leader, _strength = IN.momentum_leader(events)
     if leader:
-        L.append(f"  Final momentum favours {leader} (strength {strength:.1f}).")
+        L.append(f"  {leader} finished the stronger side.")
     L.append("")
-
-    # Player stats
-    players = data["players"]
-    if players:
-        rule("-")
-        L.append("PLAYER STATS")
-        rule("-")
-        header = f"{'Player':<14}{'Team':<6}{'G':>3}{'Sh':>4}{'Tk':>4}{'Fl':>4}{'Y':>3}{'R':>3}"
-        L.append(header)
-        ordered = sorted(players.items(),
-                         key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
-                         reverse=True)
-        for name, p in ordered:
-            L.append(
-                f"{name[:13]:<14}{(p['Team'] or '-')[:5]:<6}"
-                f"{p['Goals']:>3}{p['Shots']:>4}{p['Tackles']:>4}"
-                f"{p['Fouls']:>4}{p['Yellow Cards']:>3}{p['Red Cards']:>3}"
-            )
-        L.append("")
-
-    # Substitutions
-    if data["subs"]:
-        rule("-")
-        L.append("SUBSTITUTIONS")
-        rule("-")
-        for e in data["subs"]:
-            who = e.get("player") or "unknown"
-            L.append(f"  {_event_time(e):>8}  {e.get('team') or '-':<5}  {who}")
-        L.append("")
 
     # Post-match summary
     if summary:
@@ -250,13 +279,6 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
             L.append(f"  [{mt:>6}]  {n.get('text', '')}")
         L.append("")
 
-    # Full timeline
-    rule("-")
-    L.append("EVENT TIMELINE")
-    rule("-")
-    for e in events:
-        team = (e.get("team") or "-")
-        L.append(f"  {_event_time(e):>8}  {team:<5}  {_event_summary(e)}")
     rule()
     return "\n".join(L)
 
@@ -281,18 +303,37 @@ def _pdf_safe(s) -> str:
 # --------------------------------------------------------------------------- #
 # PDF report
 # --------------------------------------------------------------------------- #
-def build_pdf(events, data, summary, clock, path, timeline_png=None,
-              match_name="", lineups=None, notes=None):
+def build_pdf(events, data, summary, clock, path,
+              match_name="", lineups=None, notes=None, momentum_png=None,
+              home_logo=None, away_logo=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
     home, away = data["home"], data["away"]
     hp, ap = S.possession(home, away)
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
+    CONTACT = "leif@leifheaney.com"
+    SHADE = (244, 246, 249)     # alternating row tint
+    CARD = (248, 250, 252)      # light card fill
+
+    class Report(FPDF):
+        def footer(self):
+            self.set_y(-13)
+            self.set_draw_color(*LINE)
+            self.line(self.l_margin, self.get_y(),
+                      self.l_margin + self.epw, self.get_y())
+            self.ln(1)
+            self.set_font("Helvetica", "", 8)
+            self.set_text_color(*MUTED)
+            self.cell(self.epw / 2, 6,
+                      _pdf_safe(f"Kickoff Pulse  -  {CONTACT}"), align="L")
+            self.cell(self.epw / 2, 6, f"Page {self.page_no()}", align="R")
+
+    pdf = Report(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
     epw = pdf.epw  # effective page width
+    lm = pdf.l_margin
 
     def text(txt, size=11, style="", color=INK, h=6, align="L"):
         pdf.set_font("Helvetica", style, size)
@@ -300,76 +341,161 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         pdf.cell(0, h, _pdf_safe(txt), new_x=XPos.LMARGIN, new_y=YPos.NEXT,
                  align=align)
 
-    # Header — brand logo (falls back to a wordmark if the asset is missing)
+    def section(title):
+        """Section heading: a navy accent bar + uppercase title."""
+        pdf.ln(1)
+        y = pdf.get_y()
+        pdf.set_fill_color(*NAVY_RGB)
+        pdf.rect(lm, y + 0.8, 1.6, 5.2, style="F")
+        pdf.set_xy(lm + 4, y)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(*NAVY_RGB)
+        pdf.cell(0, 7, _pdf_safe(title.upper()),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(1.2)
+
+    def frame(y0):
+        """Draw a light border around content rendered from y0 to the cursor
+        (only when it stayed on one page)."""
+        y1 = pdf.get_y()
+        if y1 > y0:
+            pdf.set_draw_color(*LINE)
+            pdf.rect(lm, y0, epw, y1 - y0)
+
+    # ---- Header ----------------------------------------------------------- #
     import brand
+    top = pdf.get_y()
     logo = brand.logo_pil_white()
+    logo_h = 0.0
     if logo is not None:
         try:
-            y0 = pdf.get_y()
-            lw = 58
-            pdf.image(logo, x=pdf.l_margin, y=y0, w=lw)
-            pdf.set_y(y0 + lw * logo.height / logo.width + 3)
+            lw = 38
+            pdf.image(logo, x=lm, y=top, w=lw)
+            logo_h = lw * logo.height / logo.width
         except Exception:
-            text("KICKOFF PULSE", 22, "B", NAVY_RGB, h=10)
-    else:
-        text("KICKOFF PULSE", 22, "B", NAVY_RGB, h=10)
-    text(match_name or "Match Report", 13, "", MUTED, h=7)
-    meta = f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            logo = None
+    pdf.set_xy(lm, top + 1)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(*NAVY_RGB)
+    pdf.cell(0, 8, "POST-MATCH REPORT", align="R",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_x(lm)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(*INK)
+    pdf.cell(0, 6, _pdf_safe(match_name or "Match"), align="R",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_y(max(pdf.get_y(), top + logo_h) + 1)
+    meta = f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}   |   {CONTACT}"
     if clock:
         meta += f"   |   Match clock {clock}"
     meta += f"   |   {len(events)} events"
-    text(meta, 9, "", MUTED, h=6)
-    pdf.ln(2)
+    text(meta, 9, "", MUTED, h=5)
+    y = pdf.get_y()
+    pdf.set_draw_color(*NAVY_RGB)
+    pdf.set_line_width(0.5)
+    pdf.line(lm, y, lm + epw, y)
+    pdf.set_line_width(0.2)
+    pdf.ln(4)
 
-    # Scoreline band
-    pdf.set_fill_color(245, 247, 250)
+    # ---- Scoreline band (team crests flanking the score) ------------------ #
+    pdf.set_fill_color(*CARD)
     pdf.set_draw_color(*LINE)
     y0 = pdf.get_y()
-    pdf.rect(pdf.l_margin, y0, epw, 22, style="DF")
-    pdf.set_xy(pdf.l_margin, y0 + 3)
+    band = 34
+    pdf.rect(lm, y0, epw, band, style="DF")
+
+    def _place_logo(p, x_center, box=24):
+        """Center a crest (preserving aspect) within `box` mm at x_center."""
+        try:
+            from PIL import Image
+            with Image.open(p) as im:
+                iw, ih = im.size
+            w, h = (box, box * ih / iw) if iw >= ih else (box * iw / ih, box)
+            pdf.image(p, x=x_center - w / 2, y=y0 + (band - h) / 2, w=w, h=h)
+            return True
+        except Exception:
+            return False
+
+    logo_box, pad = 24, 6
+    have_home = bool(home_logo and os.path.exists(home_logo)) and \
+        _place_logo(home_logo, lm + pad + logo_box / 2)
+    have_away = bool(away_logo and os.path.exists(away_logo)) and \
+        _place_logo(away_logo, lm + epw - pad - logo_box / 2)
+
+    inner_l = lm + (pad + logo_box if have_home else 0)
+    inner_r = lm + epw - (pad + logo_box if have_away else 0)
+    inner_w = inner_r - inner_l
+    pdf.line(inner_l + inner_w / 2, y0 + 5, inner_l + inner_w / 2, y0 + band - 5)
+    pdf.set_xy(inner_l, y0 + 6)
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*HOME_RGB)
-    pdf.cell(epw / 2, 6, "HOME", align="C")
+    pdf.cell(inner_w / 2, 6, "HOME", align="C")
     pdf.set_text_color(*AWAY_RGB)
-    pdf.cell(epw / 2, 6, "AWAY", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-    pdf.set_x(pdf.l_margin)
-    pdf.set_font("Helvetica", "B", 22)
+    pdf.cell(inner_w / 2, 6, "AWAY", new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+             align="C")
+    pdf.set_xy(inner_l, y0 + 15)
+    pdf.set_font("Helvetica", "B", 26)
     pdf.set_text_color(*HOME_RGB)
-    pdf.cell(epw / 2, 11, str(home["Goals"]), align="C")
+    pdf.cell(inner_w / 2, 13, str(home["Goals"]), align="C")
     pdf.set_text_color(*AWAY_RGB)
-    pdf.cell(epw / 2, 11, str(away["Goals"]),
+    pdf.cell(inner_w / 2, 13, str(away["Goals"]),
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-    pdf.ln(6)
+    pdf.set_y(y0 + band + 4)
 
-    # Possession bar
-    text("Possession", 11, "B", INK, h=7)
-    bx, by, bh = pdf.l_margin, pdf.get_y(), 7
-    hw = epw * (hp / 100.0)
+    # ---- Possession & efficiency (boxed) ---------------------------------- #
+    section("Possession & Efficiency")
+    y0 = pdf.get_y()
+    pdf.ln(2)
+    bx, by, bh = lm + 4, pdf.get_y(), 7
+    bw = epw - 8
+    hw = bw * (hp / 100.0)
     pdf.set_fill_color(*HOME_RGB)
     pdf.rect(bx, by, hw, bh, style="F")
     pdf.set_fill_color(*AWAY_RGB)
-    pdf.rect(bx + hw, by, epw - hw, bh, style="F")
+    pdf.rect(bx + hw, by, bw - hw, bh, style="F")
     pdf.set_xy(bx, by)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_text_color(255, 255, 255)
-    pdf.cell(hw, bh, f" {hp}%", align="L")
-    pdf.cell(epw - hw, bh, f"{ap}% ", align="R")
-    pdf.ln(bh + 4)
+    pdf.cell(hw, bh, f" Home {hp}%", align="L")
+    pdf.cell(bw - hw, bh, f"Away {ap}% ", align="R")
+    pdf.ln(bh + 2)
+    leader, _strength = IN.momentum_leader(events)
+    momentum = f"{leader} finished stronger" if leader else "Even"
+    pdf.set_x(lm + 4)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 6, _pdf_safe(
+        f"Shot conversion: Home {_conversion(home)}%  /  Away "
+        f"{_conversion(away)}%        Momentum: {momentum}"),
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(1)
+    frame(y0)
+    pdf.ln(3)
 
-    # Efficiency line: conversion + momentum
-    leader, strength = IN.momentum_leader(events)
-    momentum = f"{leader} +{strength:.1f}" if leader else "Even"
-    text(f"Shot conversion   Home {_conversion(home)}%  /  Away "
-         f"{_conversion(away)}%        Momentum   {momentum}", 9, "", MUTED, h=6)
-    pdf.ln(2)
+    # ---- Momentum graph --------------------------------------------------- #
+    if momentum_png and os.path.exists(momentum_png):
+        section("Match Momentum")
+        try:
+            from PIL import Image
+            with Image.open(momentum_png) as im:
+                iw, ih = im.size
+            w = epw
+            h = w * ih / iw
+            y0 = pdf.get_y()
+            pdf.image(momentum_png, x=lm, y=y0, w=w, h=h)
+            pdf.set_draw_color(*LINE)
+            pdf.rect(lm, y0, w, h)
+            pdf.set_y(y0 + h + 3)
+        except Exception:
+            pass
 
-    # Starting lineups (optional)
+    # ---- Starting lineups (optional) -------------------------------------- #
     if control.has_lineups(lineups):
         hl = _roster_lines(lineups, "Home")
         al = _roster_lines(lineups, "Away")
-        text("Starting Lineups", 13, "B", INK, h=8)
+        section("Starting Lineups")
         colw = epw / 2
-        pdf.set_x(pdf.l_margin)
+        pdf.set_x(lm)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*HOME_RGB)
         pdf.cell(colw, 6, _pdf_safe(_lineup_heading(lineups, "Home")),
@@ -382,80 +508,94 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         for i in range(max(len(hl), len(al))):
             h = hl[i] if i < len(hl) else ""
             a = al[i] if i < len(al) else ""
-            pdf.set_x(pdf.l_margin)
+            pdf.set_x(lm)
             pdf.cell(colw, 5, _pdf_safe(h[:48]), align="L")
             pdf.cell(colw, 5, _pdf_safe(a[:48]), align="L",
                      new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.ln(4)
+        pdf.ln(3)
 
-    # Team comparison table
-    def stat_row(label, hv, av, header=False):
-        pdf.set_x(pdf.l_margin)
-        style = "B" if header else ""
-        pdf.set_font("Helvetica", style, 10)
-        pdf.set_text_color(*(HOME_RGB if not header else INK))
-        pdf.cell(epw * 0.25, 7, str(hv), border="B", align="C")
-        pdf.set_text_color(*INK)
-        pdf.set_font("Helvetica", "B" if header else "", 10)
-        pdf.cell(epw * 0.50, 7, label, border="B", align="C")
-        pdf.set_text_color(*(AWAY_RGB if not header else INK))
-        pdf.cell(epw * 0.25, 7, str(av), border="B", align="C",
-                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    text("Team Stats", 13, "B", INK, h=8)
-    stat_row("HOME", "", "AWAY", header=True)
+    # ---- Team stats (boxed, shaded rows) ---------------------------------- #
+    section("Team Stats")
+    y0 = pdf.get_y()
+    pdf.set_x(lm)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(*NAVY_RGB)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(epw * 0.25, 7, "HOME", align="C", fill=True)
+    pdf.cell(epw * 0.50, 7, "STATISTIC", align="C", fill=True)
+    pdf.cell(epw * 0.25, 7, "AWAY", align="C", fill=True,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    fill = False
     for k in S.STAT_KEYS:
-        stat_row(k, str(home[k]), str(away[k]))
-    pdf.ln(4)
-
-    # Player stats table
-    players = data["players"]
-    if players:
-        text("Player Stats", 13, "B", INK, h=8)
-        cols = [("Player", 0.28), ("Team", 0.13), ("G", 0.10), ("Sh", 0.10),
-                ("Tk", 0.10), ("Fl", 0.10), ("Y", 0.10), ("R", 0.09)]
-        pdf.set_x(pdf.l_margin)
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_x(lm)
+        pdf.set_fill_color(*(SHADE if fill else (255, 255, 255)))
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*HOME_RGB)
+        pdf.cell(epw * 0.25, 7, str(home[k]), align="C", fill=True)
+        pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*INK)
-        for name, frac in cols:
-            pdf.cell(epw * frac, 6, name, border="B", align="C")
-        pdf.ln(6)
-        ordered = sorted(players.items(),
-                         key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
-                         reverse=True)
+        pdf.cell(epw * 0.50, 7, _pdf_safe(k), align="C", fill=True)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*AWAY_RGB)
+        pdf.cell(epw * 0.25, 7, str(away[k]), align="C", fill=True,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        fill = not fill
+    frame(y0)
+    pdf.ln(3)
+
+    # ---- By half (boxed, grouped Home/Away per half) ---------------------- #
+    h1, h2 = data["home_halves"], data["away_halves"]
+    section("By Half")
+    y0 = pdf.get_y()
+    pdf.set_x(lm)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(*NAVY_RGB)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(epw * 0.32, 6, "", align="L", fill=True)
+    pdf.cell(epw * 0.34, 6, "1st Half", align="C", fill=True)
+    pdf.cell(epw * 0.34, 6, "2nd Half", align="C", fill=True,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_x(lm)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_fill_color(*SHADE)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(epw * 0.32, 5, " Statistic", align="L", fill=True)
+    for _ in range(2):
+        pdf.set_text_color(*HOME_RGB)
+        pdf.cell(epw * 0.17, 5, "Home", align="C", fill=True)
+        pdf.set_text_color(*AWAY_RGB)
+        pdf.cell(epw * 0.17, 5, "Away", align="C", fill=True)
+    pdf.ln(5)
+    fill = False
+    for k in HALF_STAT_KEYS:
+        pdf.set_x(lm)
+        pdf.set_fill_color(*(SHADE if fill else (255, 255, 255)))
         pdf.set_font("Helvetica", "", 9)
-        for nm, p in ordered:
-            vals = [nm[:16], p["Team"] or "-", p["Goals"], p["Shots"],
-                    p["Tackles"], p["Fouls"], p["Yellow Cards"], p["Red Cards"]]
-            pdf.set_x(pdf.l_margin)
-            for (name, frac), v in zip(cols, vals):
-                pdf.cell(epw * frac, 6, _pdf_safe(str(v)), border="B",
-                         align="L" if name == "Player" else "C")
-            pdf.ln(6)
-        pdf.ln(4)
+        pdf.set_text_color(*INK)
+        pdf.cell(epw * 0.32, 6, _pdf_safe(" " + k), align="L", fill=True)
+        for hh, aa in ((h1["1st"][k], h2["1st"][k]), (h1["2nd"][k], h2["2nd"][k])):
+            pdf.set_text_color(*HOME_RGB)
+            pdf.cell(epw * 0.17, 6, str(hh), align="C", fill=True)
+            pdf.set_text_color(*AWAY_RGB)
+            pdf.cell(epw * 0.17, 6, str(aa), align="C", fill=True)
+        pdf.ln(6)
+        fill = not fill
+    frame(y0)
+    pdf.ln(3)
 
-    # Substitutions
-    if data["subs"]:
-        text("Substitutions", 13, "B", INK, h=8)
-        for e in data["subs"]:
-            who = e.get("player") or "unknown"
-            text(f"  {_event_time(e)}   {e.get('team') or '-'}   {who}",
-                 9, "", INK, h=5)
-        pdf.ln(2)
-
-    # Summary
+    # ---- Post-match summary (optional) ------------------------------------ #
     if summary:
-        text("Post-Match Summary", 13, "B", INK, h=8)
+        section("Post-Match Summary")
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*INK)
         pdf.multi_cell(0, 6, _pdf_safe(summary))
         pdf.ln(2)
 
-    # Recorded thoughts / notes
+    # ---- Match notes (optional) ------------------------------------------- #
     if notes:
-        text("Match Notes", 13, "B", INK, h=8)
+        section("Match Notes")
         for n in notes:
-            pdf.set_x(pdf.l_margin)
+            pdf.set_x(lm)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*MUTED)
             pdf.cell(epw * 0.14, 5, _pdf_safe(n.get("match_time") or ""),
@@ -466,50 +606,53 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
                            new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
 
-    # Timeline
-    text("Event Timeline", 13, "B", INK, h=8)
-    pdf.set_font("Helvetica", "", 9)
-    for e in events:
-        pdf.set_x(pdf.l_margin)
-        pdf.set_text_color(*MUTED)
-        pdf.cell(epw * 0.14, 5, _pdf_safe(_event_time(e)), align="L")
-        team = e.get("team")
-        pdf.set_text_color(*(HOME_RGB if team == "Home"
-                             else AWAY_RGB if team == "Away" else MUTED))
-        pdf.cell(epw * 0.12, 5, _pdf_safe(team or "-"), align="L")
-        pdf.set_text_color(*INK)
-        pdf.multi_cell(epw * 0.74, 5, _pdf_safe(_event_summary(e)),
-                       new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    # Visual timeline image on its own page, scaled to fit.
-    if timeline_png and os.path.exists(timeline_png):
-        from PIL import Image
-        pdf.add_page()
-        text("Visual Timeline", 13, "B", INK, h=8)
-        with Image.open(timeline_png) as im:
-            iw, ih = im.size
-        aspect = iw / ih
-        max_w, max_h = epw, pdf.h - pdf.get_y() - pdf.b_margin
-        w = max_w
-        h = w / aspect
-        if h > max_h:
-            h = max_h
-            w = h * aspect
-        pdf.image(timeline_png, x=pdf.l_margin + (epw - w) / 2,
-                  y=pdf.get_y(), w=w, h=h)
-
     pdf.output(path)
 
 
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+TEAM_LOGO_DIR = os.environ.get("KICKOFF_TEAM_LOGO_DIR", "branding/teams")
+
+
+def _default_logo(side: str):
+    """branding/teams/home.* (or away.*) if the user dropped a crest there."""
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        p = os.path.join(TEAM_LOGO_DIR, f"{side}.{ext}")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _slugify(name: str) -> str:
+    """'Hub City FC vs Ristozi FC' -> 'Hub_City_FC_vs_Ristozi_FC'."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(name or "")).strip("_")
+
+
+def _match_date(events) -> str:
+    """Match date (YYYY-MM-DD) from the earliest event, else today."""
+    for e in events:
+        ts = e.get("timestamp")
+        if ts:
+            try:
+                return datetime.fromisoformat(ts).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def generate(events=None, summary="", clock="", out_dir=None,
              data_file=None, archive=True, match_name="", lineups=None,
-             notes=None) -> dict:
-    """Generate txt + pdf reports (and archive data). Returns the paths."""
+             notes=None, home_logo=None, away_logo=None) -> dict:
+    """Generate txt + pdf reports (and archive data). Returns the paths.
+
+    `home_logo`/`away_logo` are optional crest image paths; when omitted they
+    default to branding/teams/home.* and away.* if present.
+    """
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
+    home_logo = home_logo or _default_logo("home")
+    away_logo = away_logo or _default_logo("away")
     data_file = data_file or S.DATA_FILE
     if events is None:
         events = S.load_events(data_file)
@@ -517,27 +660,30 @@ def generate(events=None, summary="", clock="", out_dir=None,
         notes = control.load_notes()
 
     data = _collect(events)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Intuitive filename base: teams + match date, e.g.
+    # "Hub_City_FC_vs_Ristozi_FC_2026-06-24".
+    base = f"{_slugify(match_name) or 'match'}_{_match_date(events)}"
 
-    txt_path = os.path.join(out_dir, f"match_report_{ts}.txt")
-    pdf_path = os.path.join(out_dir, f"match_report_{ts}.pdf")
-    png_path = os.path.join(out_dir, f"match_timeline_{ts}.png")
-    events_csv_path = os.path.join(out_dir, f"match_events_{ts}.csv")
-    team_csv_path = os.path.join(out_dir, f"match_team_stats_{ts}.csv")
-    player_csv_path = os.path.join(out_dir, f"match_player_stats_{ts}.csv")
+    txt_path = os.path.join(out_dir, f"{base}.txt")
+    pdf_path = os.path.join(out_dir, f"{base}.pdf")
+    mom_path = os.path.join(out_dir, f"{base}_momentum.png")
+    events_csv_path = os.path.join(out_dir, f"{base}_events.csv")
+    team_csv_path = os.path.join(out_dir, f"{base}_team_stats.csv")
+    player_csv_path = os.path.join(out_dir, f"{base}_player_stats.csv")
 
-    # Render the visual timeline image (embedded in the PDF + saved alongside).
-    score = (data["home"]["Goals"], data["away"]["Goals"])
+    # Render the momentum graph (embedded in the PDF + saved alongside).
     try:
-        TL.render(events, score=score, clock=clock, path=png_path)
+        import momentum_image as MOM
+        mom_path = MOM.render(events, mom_path)
     except Exception:
-        png_path = None
+        mom_path = None
 
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock, match_name, lineups,
                             notes))
-    build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
-              match_name=match_name, lineups=lineups, notes=notes)
+    build_pdf(events, data, summary, clock, pdf_path,
+              match_name=match_name, lineups=lineups, notes=notes,
+              momentum_png=mom_path, home_logo=home_logo, away_logo=away_logo)
 
     # Spreadsheet-friendly data exports.
     for csv_path, content in (
@@ -553,10 +699,10 @@ def generate(events=None, summary="", clock="", out_dir=None,
         "events_csv": events_csv_path, "team_csv": team_csv_path,
         "players_csv": player_csv_path,
     }
-    if png_path:
-        result["image"] = png_path
+    if mom_path and os.path.exists(mom_path):
+        result["momentum"] = mom_path
     if archive and os.path.exists(data_file):
-        archive_path = os.path.join(out_dir, f"match_data_{ts}.json")
+        archive_path = os.path.join(out_dir, f"{base}_data.json")
         shutil.copyfile(data_file, archive_path)
         result["data"] = archive_path
     return result

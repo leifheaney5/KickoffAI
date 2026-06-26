@@ -23,6 +23,78 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.10.1] - 2026-06-25
+
+### Changed
+
+- Report files are now named by teams + match date (e.g.
+  `Hub_City_FC_vs_Ristozi_FC_2026-06-24.pdf`) instead of a generation
+  timestamp, for intuitive lookup.
+
+### Removed
+
+- Further trimmed the report: removed the Key Moments, Substitutions, and
+  Visual Timeline sections.
+
+## [1.10.0] - 2026-06-25
+
+### Changed
+
+- Redesigned the PDF report into a polished, coach-facing document: brand header
+  with a smaller logo + "POST-MATCH REPORT" title, navy section accent bars,
+  bordered cards, alternating shaded stat tables, a consistent colour scheme, and
+  a footer with page numbers + contact email.
+- **By Half** is reformatted into a grouped table (1st/2nd half, each with Home
+  and Away columns in team colours) instead of the hard-to-read `H-A` cells.
+- Reports now export to a tracked **`exports/`** directory by default
+  (`REPORTS_DIR`), replacing the git-ignored `reports/`.
+
+### Added
+
+- **Team crests** in the scoreline band: drop `home.*` / `away.*` into
+  `branding/teams/` (or pass `home_logo`/`away_logo` to `report.generate`).
+- Contact email in the report header and footer.
+
+### Removed
+
+- Trimmed the report to the coach-relevant essentials: removed the Scoring
+  Summary, Player of the Match, Vision Analysis (CV), Player Stats table, and
+  textual Event Timeline sections (the CSV exports still carry the full detail).
+
+## [1.9.0] - 2026-06-25
+
+### Added
+
+- Comprehensive coach report: the post-match report now embeds a **momentum
+  graph** (new `momentum_image.py`, an area chart of `insights.momentum_series`
+  with goals marked), an auto-tagged **Key Moments** timeline
+  (`insights.key_moments` — goals, cards, shots on target, and sustained-pressure
+  momentum swings), and an optional **Vision Analysis (CV)** section
+  (`report.load_cv_stats`) summarising CV possession, passing, ball-detection and
+  coverage. All embedded in both the text and PDF reports.
+- `report.generate` accepts `cv_stats_file` to fold a vision `match_stats` JSON
+  into the report; the CV section is clearly labelled as uncalibrated /
+  image-space / partial-coverage so it reads as directional, not exact.
+
+## [1.8.0] - 2026-06-24
+
+### Added
+
+- Post-match report now includes a **scoring summary** (goalscorers with the
+  minute, denied goals excluded), an auto-selected **Player of the Match**
+  (heuristic from goals, shots on target, saves, tackles, minus cards), and a
+  **per-half breakdown** of the key stats (goals, shots, on target, corners,
+  fouls). All three appear in both the plain-text and PDF reports.
+- New shared helpers `stats.event_half` and `stats.team_stats_by_half` derive
+  first/second-half splits from the stamped match clock.
+
+### Changed
+
+- Possession in the report is now labelled "(est.)" to make clear it is
+  approximated from on-ball action share rather than measured.
+- The opaque "momentum strength" number is replaced with a plain-language note
+  ("Home/Away finished the stronger side").
+
 ## [1.7.0] - 2026-06-24
 
 ### Changed
