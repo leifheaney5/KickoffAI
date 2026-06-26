@@ -23,6 +23,21 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.9.0] - 2026-06-25
+
+### Added
+
+- Comprehensive coach report: the post-match report now embeds a **momentum
+  graph** (new `momentum_image.py`, an area chart of `insights.momentum_series`
+  with goals marked), an auto-tagged **Key Moments** timeline
+  (`insights.key_moments` — goals, cards, shots on target, and sustained-pressure
+  momentum swings), and an optional **Vision Analysis (CV)** section
+  (`report.load_cv_stats`) summarising CV possession, passing, ball-detection and
+  coverage. All embedded in both the text and PDF reports.
+- `report.generate` accepts `cv_stats_file` to fold a vision `match_stats` JSON
+  into the report; the CV section is clearly labelled as uncalibrated /
+  image-space / partial-coverage so it reads as directional, not exact.
+
 ## [1.8.0] - 2026-06-24
 
 ### Added

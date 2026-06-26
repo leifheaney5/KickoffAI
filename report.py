@@ -121,6 +121,65 @@ def player_of_match(players: dict):
 
 
 # --------------------------------------------------------------------------- #
+# Computer-vision (the "Eye") layer — optional supplementary stats
+# --------------------------------------------------------------------------- #
+def _cv_team(token) -> str:
+    """Vision passer token -> side (mirrors vision.bridge.token_team)."""
+    token = token or ""
+    if token.startswith("TeamA"):
+        return "Home"
+    if token.startswith("TeamB"):
+        return "Away"
+    return "-"
+
+
+def load_cv_stats(path) -> dict:
+    """Summarise a vision match_stats JSON for the report, or None if absent.
+
+    The vision layer is uncalibrated (image-space) and may cover only part of
+    the match, so the summary carries coverage + a possession/passing digest
+    that the report renders under clear "(CV, approximate)" labelling.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (ValueError, OSError):
+        return None
+
+    td = d.get("tracking_data", {}) or {}
+    se = d.get("statistical_events", {}) or {}
+    frames = td.get("spatial_tracking_frames", []) or []
+    passes = se.get("passing_stats", []) or []
+    poss = se.get("possession_summary", {}) or {}
+
+    label = str(td.get("frame_rate_sampled", "10_fps"))
+    try:
+        fps = float(label.split("_")[0])
+    except (ValueError, IndexError):
+        fps = 10.0
+
+    from collections import Counter
+    outcomes = Counter((p.get("outcome") or "?") for p in passes)
+    by_team = Counter(_cv_team(p.get("passer")) for p in passes)
+    ball_seen = sum(1 for f in frames if (f.get("ball") or {}).get("x") is not None)
+    n = len(frames)
+    return {
+        "coordinate_space": td.get("coordinate_space"),
+        "frames": n,
+        "coverage_min": round(n / fps / 60.0, 1) if fps else 0.0,
+        "possession": (round(float(poss.get("team_home_percentage", 0))),
+                       round(float(poss.get("team_away_percentage", 0)))),
+        "passes_total": len(passes),
+        "pass_outcomes": dict(outcomes),
+        "pass_by_team": {"Home": by_team.get("Home", 0),
+                         "Away": by_team.get("Away", 0)},
+        "ball_detect_pct": round(100 * ball_seen / n) if n else 0,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # CSV exports (spreadsheet-friendly: open in Excel / Sheets for analysis)
 # --------------------------------------------------------------------------- #
 EVENT_CSV_FIELDS = ["match_time", "timestamp", "team", "player", "action",
@@ -190,7 +249,7 @@ def _lineup_heading(lineups, team) -> str:
 # Plain-text report
 # --------------------------------------------------------------------------- #
 def build_text(events, data, summary, clock, match_name="", lineups=None,
-               notes=None) -> str:
+               notes=None, cv=None) -> str:
     home, away = data["home"], data["away"]
     L = []
     w = 56
@@ -221,6 +280,17 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         for g in goals:
             who = f"  {g['player']}" if g["player"] else ""
             L.append(f"  {g['time']:>8}  {g['team']:<5}{who}")
+        L.append("")
+
+    # Key moments (auto-tagged from events + momentum)
+    moments = IN.key_moments(events)
+    if moments:
+        rule("-")
+        L.append("KEY MOMENTS")
+        rule("-")
+        for m in moments:
+            L.append(f"  {m['mmss']:>6}  {m['label']}")
+        L.append("  (Momentum chart saved alongside this report.)")
         L.append("")
 
     # Starting lineups (optional)
@@ -290,6 +360,24 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         if bits:
             line += " - " + ", ".join(bits)
         L.append(line)
+        L.append("")
+
+    # Computer-vision layer (the Eye) — optional, clearly labelled
+    if cv and cv.get("frames"):
+        hp, ap = cv["possession"]
+        rule("-")
+        L.append("VISION ANALYSIS (CV)")
+        rule("-")
+        L.append(f"  Coverage: {cv['coverage_min']} min "
+                 f"({cv['frames']} frames, ball seen {cv['ball_detect_pct']}%)")
+        L.append(f"  Possession (CV): Home {hp}%  /  Away {ap}%")
+        po = cv["pass_outcomes"]
+        L.append(f"  Passes: {cv['passes_total']}  "
+                 f"(completed {po.get('completed', 0)}, "
+                 f"intercepted {po.get('intercepted', 0)}, "
+                 f"incomplete {po.get('incomplete', 0)})")
+        L.append("  Note: uncalibrated, image-space, partial coverage - "
+                 "treat as directional.")
         L.append("")
 
     # Player stats
@@ -372,7 +460,8 @@ def _pdf_safe(s) -> str:
 # PDF report
 # --------------------------------------------------------------------------- #
 def build_pdf(events, data, summary, clock, path, timeline_png=None,
-              match_name="", lineups=None, notes=None):
+              match_name="", lineups=None, notes=None, cv=None,
+              momentum_png=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
@@ -486,6 +575,51 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
         tail = ("  -  " + ", ".join(bits)) if bits else ""
         text("Player of the Match", 11, "B", INK, h=7)
         text(f"{name} ({pp.get('Team') or '-'}){tail}", 10, "", INK, h=6)
+        pdf.ln(2)
+
+    # Momentum graph (embedded chart)
+    if momentum_png and os.path.exists(momentum_png):
+        text("Match Momentum", 13, "B", INK, h=8)
+        try:
+            from PIL import Image
+            with Image.open(momentum_png) as im:
+                iw, ih = im.size
+            w = epw
+            h = w * ih / iw
+            pdf.image(momentum_png, x=pdf.l_margin, y=pdf.get_y(), w=w, h=h)
+            pdf.ln(h + 3)
+        except Exception:
+            pass
+
+    # Key moments (auto-tagged)
+    moments = IN.key_moments(events)
+    if moments:
+        text("Key Moments", 13, "B", INK, h=8)
+        pdf.set_font("Helvetica", "", 9)
+        for m in moments:
+            pdf.set_x(pdf.l_margin)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(epw * 0.12, 5, _pdf_safe(m["mmss"]), align="L")
+            col = (HOME_RGB if m.get("team") == "Home"
+                   else AWAY_RGB if m.get("team") == "Away" else INK)
+            pdf.set_text_color(*col)
+            pdf.multi_cell(epw * 0.88, 5, _pdf_safe(m["label"]),
+                           new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(3)
+
+    # Vision analysis (CV) — optional, clearly labelled
+    if cv and cv.get("frames"):
+        chp, cap = cv["possession"]
+        po = cv["pass_outcomes"]
+        text("Vision Analysis (CV)", 13, "B", INK, h=8)
+        text(f"Coverage {cv['coverage_min']} min  |  ball seen "
+             f"{cv['ball_detect_pct']}%  |  possession Home {chp}% / Away {cap}%",
+             9, "", INK, h=5)
+        text(f"Passes {cv['passes_total']}  -  completed "
+             f"{po.get('completed', 0)}, intercepted {po.get('intercepted', 0)}, "
+             f"incomplete {po.get('incomplete', 0)}", 9, "", INK, h=5)
+        text("Uncalibrated image-space, partial coverage - directional only.",
+             8, "I", MUTED, h=5)
         pdf.ln(2)
 
     # Starting lineups (optional)
@@ -651,8 +785,12 @@ def build_pdf(events, data, summary, clock, path, timeline_png=None,
 # --------------------------------------------------------------------------- #
 def generate(events=None, summary="", clock="", out_dir=None,
              data_file=None, archive=True, match_name="", lineups=None,
-             notes=None) -> dict:
-    """Generate txt + pdf reports (and archive data). Returns the paths."""
+             notes=None, cv_stats_file=None) -> dict:
+    """Generate txt + pdf reports (and archive data). Returns the paths.
+
+    ``cv_stats_file`` optionally points at a vision ``match_stats`` JSON; when
+    present its possession/passing digest is embedded under a "(CV)" section.
+    """
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
     data_file = data_file or S.DATA_FILE
@@ -662,11 +800,13 @@ def generate(events=None, summary="", clock="", out_dir=None,
         notes = control.load_notes()
 
     data = _collect(events)
+    cv = load_cv_stats(cv_stats_file)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     txt_path = os.path.join(out_dir, f"match_report_{ts}.txt")
     pdf_path = os.path.join(out_dir, f"match_report_{ts}.pdf")
     png_path = os.path.join(out_dir, f"match_timeline_{ts}.png")
+    mom_path = os.path.join(out_dir, f"match_momentum_{ts}.png")
     events_csv_path = os.path.join(out_dir, f"match_events_{ts}.csv")
     team_csv_path = os.path.join(out_dir, f"match_team_stats_{ts}.csv")
     player_csv_path = os.path.join(out_dir, f"match_player_stats_{ts}.csv")
@@ -678,11 +818,19 @@ def generate(events=None, summary="", clock="", out_dir=None,
     except Exception:
         png_path = None
 
+    # Render the momentum graph (embedded in the PDF + saved alongside).
+    try:
+        import momentum_image as MOM
+        mom_path = MOM.render(events, mom_path)
+    except Exception:
+        mom_path = None
+
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock, match_name, lineups,
-                            notes))
+                            notes, cv=cv))
     build_pdf(events, data, summary, clock, pdf_path, timeline_png=png_path,
-              match_name=match_name, lineups=lineups, notes=notes)
+              match_name=match_name, lineups=lineups, notes=notes, cv=cv,
+              momentum_png=mom_path)
 
     # Spreadsheet-friendly data exports.
     for csv_path, content in (
@@ -700,6 +848,8 @@ def generate(events=None, summary="", clock="", out_dir=None,
     }
     if png_path:
         result["image"] = png_path
+    if mom_path and os.path.exists(mom_path):
+        result["momentum"] = mom_path
     if archive and os.path.exists(data_file):
         archive_path = os.path.join(out_dir, f"match_data_{ts}.json")
         shutil.copyfile(data_file, archive_path)

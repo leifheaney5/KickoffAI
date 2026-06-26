@@ -86,6 +86,73 @@ def momentum_leader(events: list):
     return ("Home" if m > 0 else "Away"), abs(m)
 
 
+def key_moments(events: list, max_momentum: int = 4) -> list:
+    """Auto-tag the match's notable moments for the report.
+
+    Combines discrete events (goals, red/yellow cards, shots on target) with
+    momentum analysis (sustained-pressure peaks), so a coach sees the turning
+    points at a glance. Returns a list of dicts sorted by match minute::
+
+        {minute, mmss, team, type, label, source}
+
+    ``source`` is "audio" (a logged play-by-play event) or "momentum" (derived
+    from the momentum curve, which blends every event the log carries).
+    """
+    moments = []
+
+    def mmss(minute: float) -> str:
+        return f"{int(minute):02d}:{int(round((minute % 1) * 60)):02d}"
+
+    for e in events:
+        if e.get("status") == "denied":
+            continue
+        action = (e.get("action") or "").lower()
+        result = (e.get("result") or "").lower()
+        team = e.get("team")
+        who = e.get("player")
+        minute = parse_minute(e, 0.0)
+        suffix = f" ({who})" if who else ""
+        if action == "goal" or result == "scored":
+            moments.append((minute, team, "goal", f"GOAL - {team}{suffix}"))
+        elif action == "red_card" or (action == "card" and "red" in result):
+            moments.append((minute, team, "red_card", f"Red card - {team}{suffix}"))
+        elif action == "yellow_card" or (action == "card" and "yellow" in result):
+            moments.append((minute, team, "yellow_card",
+                            f"Yellow card - {team}{suffix}"))
+        elif action == "shot" and result in ("on target", "saved"):
+            moments.append((minute, team, "shot_on_target",
+                            f"Shot on target - {team}{suffix}"))
+
+    discrete = [
+        {"minute": m, "mmss": mmss(m), "team": t, "type": k, "label": lab,
+         "source": "audio"}
+        for (m, t, k, lab) in moments
+    ]
+
+    # Sustained-pressure peaks: local maxima of |momentum| above a threshold,
+    # spaced apart so we surface distinct passages rather than one long run.
+    rows = momentum_series(events)
+    peaks = []
+    THRESH, SPACING = 2.5, 4.0  # strength units, minutes apart
+    for i in range(1, len(rows) - 1):
+        mag = abs(rows[i]["momentum"])
+        if mag < THRESH:
+            continue
+        if mag < abs(rows[i - 1]["momentum"]) or mag <= abs(rows[i + 1]["momentum"]):
+            continue
+        minute = rows[i]["minute"]
+        if any(abs(minute - p["minute"]) < SPACING for p in peaks):
+            continue
+        team = "Home" if rows[i]["momentum"] > 0 else "Away"
+        peaks.append({"minute": minute, "mmss": mmss(minute), "team": team,
+                      "type": "momentum_swing",
+                      "label": f"Sustained {team} pressure", "source": "momentum"})
+    peaks.sort(key=lambda p: abs(p["minute"]))
+    peaks = sorted(peaks, key=lambda p: p["minute"])[:max_momentum]
+
+    return sorted(discrete + peaks, key=lambda m: m["minute"])
+
+
 def headline_metrics(events: list, home: dict, away: dict) -> dict:
     """A few glanceable numbers for the top of the Insights page."""
     leader, strength = momentum_leader(events)
