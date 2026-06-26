@@ -7,7 +7,7 @@ description: Generate the Kickoff Pulse post-match coach report (polished PDF + 
 
 Produces the coach-facing report bundle from the live match log
 (`match_data.json`) and the saved match state (`control.json`): a polished PDF,
-a plain-text version, CSV exports, a momentum graph, and a visual timeline.
+a plain-text version, CSV exports, and a momentum graph.
 
 ## Run it
 
@@ -18,20 +18,21 @@ From the repo root (`/Users/leifheaney/KickoffAI`):
 ```
 
 This reads the current `match_data.json` + `control.json` (match name, clock,
-summary, lineups), auto-detects team crests, writes a timestamped bundle into
-`exports/`, and prints every output path. Then surface the PDF path to the user
-and offer to open it:
+summary, lineups), auto-detects team crests, writes the bundle into `exports/`,
+and prints every output path. Files are named by teams + match date, e.g.
+`Hub_City_FC_vs_Ristozi_FC_2026-06-24.pdf`. Then surface the PDF path to the
+user and offer to open it:
 
 ```bash
-open "$(ls -t exports/match_report_*.pdf | head -1)"
+open "$(ls -t exports/*.pdf | head -1)"
 ```
 
 ## What's in the report
 
-Score · Possession & efficiency · **Match momentum graph** · **Key moments**
-(auto-tagged goals, cards, shots on target, momentum swings) · Team stats ·
-**By half** (grouped Home/Away per half) · substitutions · summary · notes ·
-visual timeline. Header/footer carry the contact email and page numbers.
+Score · Possession & efficiency · **Match momentum graph** · Team stats ·
+**By half** (grouped Home/Away per half, in team colours) · summary · notes.
+Header/footer carry the contact email and page numbers. (Key Moments,
+Substitutions, and the Visual Timeline were intentionally removed.)
 
 ## Inputs & options
 
