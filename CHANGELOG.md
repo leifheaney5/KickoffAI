@@ -23,6 +23,31 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.10.0] - 2026-06-25
+
+### Changed
+
+- Redesigned the PDF report into a polished, coach-facing document: brand header
+  with a smaller logo + "POST-MATCH REPORT" title, navy section accent bars,
+  bordered cards, alternating shaded stat tables, a consistent colour scheme, and
+  a footer with page numbers + contact email.
+- **By Half** is reformatted into a grouped table (1st/2nd half, each with Home
+  and Away columns in team colours) instead of the hard-to-read `H-A` cells.
+- Reports now export to a tracked **`exports/`** directory by default
+  (`REPORTS_DIR`), replacing the git-ignored `reports/`.
+
+### Added
+
+- **Team crests** in the scoreline band: drop `home.*` / `away.*` into
+  `branding/teams/` (or pass `home_logo`/`away_logo` to `report.generate`).
+- Contact email in the report header and footer.
+
+### Removed
+
+- Trimmed the report to the coach-relevant essentials: removed the Scoring
+  Summary, Player of the Match, Vision Analysis (CV), Player Stats table, and
+  textual Event Timeline sections (the CSV exports still carry the full detail).
+
 ## [1.9.0] - 2026-06-25
 
 ### Added

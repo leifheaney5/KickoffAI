@@ -22,6 +22,12 @@ reports/
 recordings/
 *.tmp
 
+# Report/artifact exports: keep the directory (and its docs), ignore the
+# generated, regenerable bundles inside it.
+exports/*
+!exports/.gitkeep
+!exports/README.md
+
 # Vision pipeline artifacts. Large regenerables stay ignored; the trained model,
 # the annotation zip, and the public dataset are kept IN-REPO so both the desktop
 # and the laptop have everything after a pull.
@@ -42,6 +48,7 @@ match_segments/
 # Match library — local DB + managed media store (regenerable / large)
 library.db
 library/
+backups/
 
 # macOS
 .DS_Store

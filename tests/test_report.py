@@ -72,12 +72,12 @@ def test_player_of_match_none_without_positive_contributions():
     assert report.player_of_match(players) is None
 
 
-def test_build_text_has_scoring_half_and_potm(sample_events):
+def test_build_text_has_key_moments_and_by_half(sample_events):
     data = report._collect(sample_events)
     txt = report.build_text(sample_events, data, "Good.", "31:00", "Demo")
-    assert "SCORING SUMMARY" in txt
+    assert "KEY MOMENTS" in txt
     assert "BY HALF" in txt
-    assert "PLAYER OF THE MATCH" in txt
+    assert "leif@leifheaney.com" in txt  # contact in the header
     # Per-half goals are bucketed by the stamped clock (the goal was at 05:40).
     assert data["home_halves"]["1st"]["Goals"] == 1
 
@@ -94,57 +94,14 @@ def test_key_moments_tags_goals_and_swings(sample_events):
                for m in moments)
 
 
-def test_load_cv_stats_missing_returns_none(tmp_path):
-    assert report.load_cv_stats(None) is None
-    assert report.load_cv_stats(str(tmp_path / "nope.json")) is None
-
-
-def test_load_cv_stats_summarizes(tmp_path):
-    cv = {
-        "tracking_data": {
-            "frame_rate_sampled": "10_fps", "coordinate_space": "image",
-            "spatial_tracking_frames": [
-                {"ball": {"x": 10.0, "y": 5.0}, "players": []},
-                {"ball": {"x": None}, "players": []},
-            ],
-        },
-        "statistical_events": {
-            "possession_summary": {"team_home_percentage": 60.0,
-                                   "team_away_percentage": 40.0},
-            "passing_stats": [
-                {"passer": "TeamA_trk1", "outcome": "completed"},
-                {"passer": "TeamB_trk2", "outcome": "intercepted"},
-            ],
-        },
-    }
-    p = tmp_path / "cv.json"
-    p.write_text(__import__("json").dumps(cv))
-    out = report.load_cv_stats(str(p))
-    assert out["frames"] == 2
-    assert out["possession"] == (60, 40)
-    assert out["ball_detect_pct"] == 50
-    assert out["passes_total"] == 2
-    assert out["pass_by_team"] == {"Home": 1, "Away": 1}
-
-
-def test_generate_with_cv_embeds_section(sample_events, tmp_path):
-    cv_path = tmp_path / "cv.json"
-    cv_path.write_text(__import__("json").dumps({
-        "tracking_data": {"frame_rate_sampled": "10_fps",
-                          "coordinate_space": "image",
-                          "spatial_tracking_frames": [{"ball": {"x": 1.0}}]},
-        "statistical_events": {
-            "possession_summary": {"team_home_percentage": 55.0,
-                                   "team_away_percentage": 45.0},
-            "passing_stats": [{"passer": "TeamA_trk1", "outcome": "completed"}],
-        },
-    }))
+def test_generate_embeds_momentum(sample_events, tmp_path):
     paths = report.generate(events=sample_events, summary="s", clock="90:00",
                             out_dir=str(tmp_path), archive=False,
-                            match_name="CV Test", cv_stats_file=str(cv_path))
-    txt = open(paths["txt"]).read()
-    assert "VISION ANALYSIS (CV)" in txt
+                            match_name="Demo")
     assert "momentum" in paths and os.path.exists(paths["momentum"])
+    txt = open(paths["txt"]).read()
+    assert "VISION ANALYSIS" not in txt  # CV section removed
+    assert "EVENT TIMELINE" not in txt   # event timeline removed
 
 
 def test_pdf_safe_transliterates():
