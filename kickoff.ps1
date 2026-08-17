@@ -107,21 +107,41 @@ function Stop-Kickoff {
 try {
     $env:KICKOFF_DATA_FILE = $DataFile
 
-    Write-Green 'Starting the audio tracker (The Ear + The Brain)...'
-    $audioProc = Start-Process -FilePath $VenvPython -ArgumentList 'audio_tracker.py' `
-        -NoNewWindow -PassThru
-    Start-Sleep -Seconds 1
-    if ($audioProc.HasExited) {
-        Write-Red 'Audio tracker failed to start. Check the output above.'
-        Write-Red 'Tip: make sure a microphone is connected and Windows mic'
-        Write-Red 'privacy access is enabled (Settings > Privacy & security > Microphone).'
-        return
+    # Ingest mode: vision is the primary path, so the mic tracker only starts
+    # when this match actually uses voice. Override with $env:KICKOFF_INGEST.
+    $IngestMode = $env:KICKOFF_INGEST
+    if (-not $IngestMode) {
+        $IngestMode = (& $VenvPython -c "import control; print(control.load_control().get('ingest_mode','vision'))" 2>$null)
     }
-    Write-Green "OK Audio tracker running (PID $($audioProc.Id))"
+    if (-not $IngestMode) { $IngestMode = 'vision' }
+    $IngestMode = $IngestMode.Trim()
+
+    if ($IngestMode -eq 'vision') {
+        Write-Green '- Audio tracker not started (vision-only match).'
+        Write-Yellow '  Need it? Switch ingest mode on Camera & Feed, or set KICKOFF_INGEST=both.'
+    }
+    else {
+        Write-Green 'Starting the audio tracker (The Ear + The Brain)...'
+        $audioProc = Start-Process -FilePath $VenvPython -ArgumentList 'audio_tracker.py' `
+            -NoNewWindow -PassThru
+        Start-Sleep -Seconds 1
+        if ($audioProc.HasExited) {
+            Write-Red 'Audio tracker failed to start. Check the output above.'
+            Write-Red 'Tip: make sure a microphone is connected and Windows mic'
+            Write-Red 'privacy access is enabled (Settings > Privacy & security > Microphone).'
+            return
+        }
+        Write-Green "OK Audio tracker running (PID $($audioProc.Id))"
+    }
 
     Write-Green 'Launching the dashboard in your browser...'
     Write-Host '----------------------------------------------------------------'
-    Write-Yellow '  Speak your play-by-play into the mic.'
+    if ($IngestMode -eq 'voice') {
+        Write-Yellow '  Speak your play-by-play into the mic.'
+    }
+    else {
+        Write-Yellow '  Open Match Console and press Start to run the Eye on your feed.'
+    }
     Write-Yellow '  Press Ctrl+C here to stop everything.'
     Write-Host '----------------------------------------------------------------'
 

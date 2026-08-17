@@ -23,6 +23,7 @@ import brand            # noqa: E402
 import control          # noqa: E402
 import insights as IN   # noqa: E402
 import stats as S       # noqa: E402
+import ui_helpers as UI  # noqa: E402
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
@@ -52,32 +53,33 @@ st.caption(f"AI analysis  ·  Home {home['Goals']}–{away['Goals']} Away  ·  {
 # --------------------------------------------------------------------------- #
 # Synopsis recordings — play back your recorded thoughts
 # --------------------------------------------------------------------------- #
-st.markdown(brand.section("Synopsis recordings"), unsafe_allow_html=True)
+st.markdown(brand.section("Match notes"), unsafe_allow_html=True)
 notes = control.load_notes()
 if notes:
-    st.caption("Play back the thoughts you recorded on the dashboard "
-               "(“Record thoughts / synopsis”). Newest first.")
+    st.caption("Every note from this match — typed on the Match Console, or "
+               "spoken via “Record thoughts”. Newest first.")
     for n in reversed(notes):
         rc1, rc2 = st.columns([3, 2], vertical_alignment="center")
         with rc1:
             st.markdown(
                 f"<div class='kp-feed'><div class='body'><div class='top'>"
-                f"<span class='t'>{n.get('match_time') or ''}</span></div>"
+                f"<span class='t'>{n.get('match_time') or ''}</span>"
+                f"&nbsp;&nbsp;{UI.note_badge(n)}</div>"
                 f"<div class='sum'>{html.escape(n.get('text', ''))}</div>"
                 f"</div></div>", unsafe_allow_html=True)
         with rc2:
             audio = n.get("audio")
             if audio and os.path.exists(audio):
                 st.audio(audio)
-            else:
+            elif control.note_source(n) == "voice":
                 st.caption("No audio saved for this note.")
             if st.button("Delete", key=f"ins_delnote_{n['timestamp']}",
                          width="stretch"):
                 control.delete_note(n["timestamp"])
                 st.rerun()
 else:
-    st.caption("No synopsis recordings yet. Use “Record thoughts / synopsis” "
-               "on the dashboard to capture one.")
+    st.caption("No notes yet. Write one on the **Match Console**, or use "
+               "“Record thoughts” there to speak one.")
 
 st.write("")
 

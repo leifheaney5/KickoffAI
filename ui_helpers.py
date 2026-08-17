@@ -7,6 +7,7 @@ the whole app was one page. They now live here so the Live Match, Match Setup,
 Audio & Mic and Post-Match pages can each import the pieces they need.
 """
 
+import html
 import os
 import time
 
@@ -39,6 +40,19 @@ def mic_svg(active: bool) -> str:
         f"stroke-linejoin='round' style='{glow}'>"
         f"<rect x='9' y='3' width='6' height='11' rx='3'/>"
         f"<path d='M5 11a7 7 0 0 0 14 0'/><path d='M12 18v3'/></svg>"
+    )
+
+
+def eye_svg(active: bool) -> str:
+    """The Eye's counterpart to mic_svg — same size, weight and glow language."""
+    color = "#34d399" if active else "#5b6e92"
+    glow = "filter:drop-shadow(0 0 6px rgba(52,211,153,.9))" if active else ""
+    return (
+        f"<svg width='18' height='18' viewBox='0 0 24 24' fill='none' "
+        f"stroke='{color}' stroke-width='2' stroke-linecap='round' "
+        f"stroke-linejoin='round' style='{glow}'>"
+        f"<path d='M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z'/>"
+        f"<circle cx='12' cy='12' r='3'/></svg>"
     )
 
 
@@ -266,7 +280,44 @@ def ai_summary(events):
 # --------------------------------------------------------------------------- #
 # Live fragments (auto-refresh every second)
 # --------------------------------------------------------------------------- #
-def render_status_chips():
+# The Eye's health maps onto the same dot vocabulary as the mic chip.
+_EYE_DOT = {"ok": "rec", "starting": "paused", "paused": "paused",
+            "stale": "warn", "down": "off"}
+
+
+def vision_chips() -> str:
+    """Chips describing the Eye. Empty string when vision isn't this match's job."""
+    import vision_runner
+
+    st_v = vision_runner.status()
+    dot = _EYE_DOT.get(st_v["health"], "off")
+    label = vision_runner.health_label(st_v)
+
+    chips = [
+        f"<div class='kp-chip'>{eye_svg(st_v['health'] == 'ok')}"
+        f"<span class='dot {dot}'></span><span class='v'>{label}</span></div>"
+    ]
+    if st_v["running"]:
+        home, away = st_v["possession_home"], st_v["possession_away"]
+        chips += [
+            f"<div class='kp-chip'><span class='l'>FPS</span>"
+            f"<span class='v mono'>{st_v['fps']:.1f}</span></div>",
+            f"<div class='kp-chip'><span class='l'>Ball</span>"
+            f"<span class='v mono'>{st_v['ball_rate'] * 100:.0f}%</span></div>",
+            f"<div class='kp-chip'><span class='l'>Poss</span>"
+            f"<span class='v mono'>{home:.0f}/{away:.0f}</span></div>",
+            f"<div class='kp-chip'><span class='l'>Passes</span>"
+            f"<span class='v'>{st_v['passes']}</span></div>",
+        ]
+        if st_v["reconnects"]:
+            chips.append(
+                f"<div class='kp-chip'><span class='l'>Drops</span>"
+                f"<span class='v'>{st_v['reconnects']} recovered</span></div>")
+    return "".join(chips)
+
+
+def voice_chips() -> str:
+    """Chips describing the mic tracker (the Ear)."""
     status = control.load_status()
     paused = control.load_control().get("paused", False)
     online = control.tracker_online(status)
@@ -298,8 +349,7 @@ def render_status_chips():
             f"<div class='kp-chip'><span class='l'>Backlog</span>"
             f"<span class='v'>{' · '.join(parts)}</span></div>")
 
-    st.markdown(
-        f"<div class='kp-status'>"
+    return (
         f"<div class='kp-chip'>{mic_svg(active)}<span class='dot {dot}'></span>"
         f"<span class='v'>{label}</span></div>"
         f"<div class='kp-chip'><span class='l'>Rec</span>"
@@ -310,9 +360,191 @@ def render_status_chips():
         f"<span class='v'>{events_n}</span></div>"
         f"{backlog_chip}"
         f"<div class='kp-chip heard'><span class='l'>Heard</span>"
-        f"<span class='kp-heard'>{heard}</span></div>"
-        f"</div>",
-        unsafe_allow_html=True)
+        f"<span class='kp-heard'>{heard}</span></div>")
+
+
+def render_status_chips():
+    """The live status bar, showing only the ingest paths this match uses.
+
+    Previously this was mic-only, which left a vision-first match with a bar
+    that said "Offline" while the Eye was happily analysing.
+    """
+    state = control.load_control()
+    parts = []
+    if control.uses_vision(state):
+        parts.append(vision_chips())
+    if control.uses_voice(state):
+        parts.append(voice_chips())
+    if not parts:                       # defensive: an unknown mode
+        parts.append(voice_chips())
+
+    st.markdown(f"<div class='kp-status'>{''.join(parts)}</div>",
+                unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------- #
+# Match notes (typed or spoken)
+# --------------------------------------------------------------------------- #
+def note_badge(note) -> str:
+    """A small source tag so typed and spoken notes are told apart at a glance."""
+    written = control.note_source(note) == "written"
+    label = "WRITTEN" if written else "VOICE"
+    color = "var(--c-muted)" if written else "#34d399"
+    return (f"<span style='font-family:var(--font-disp);font-size:.6rem;"
+            f"letter-spacing:.14em;color:{color};font-weight:600'>{label}</span>")
+
+
+def render_note_composer(state, key="note_compose"):
+    """Text box + Add button for writing a match note.
+
+    Kept out of any auto-refreshing fragment: a 1s rerun would wipe half-typed
+    text. Returns True when a note was saved.
+    """
+    text = st.text_area(
+        "Write a note", key=key, height=90, label_visibility="collapsed",
+        placeholder="Type an observation — a tactical read, an injury, "
+                    "something to review later…")
+    c1, c2 = st.columns([1, 3], vertical_alignment="center")
+    saved = False
+    if c1.button("Add note", type="primary", width="stretch",
+                 key=f"{key}_add", disabled=not text.strip()):
+        try:
+            control.add_written_note(text, state)
+            saved = True
+        except ValueError as exc:
+            st.warning(str(exc))
+    with c2:
+        main_clk, added, _half = control.clock_label(state["timer"])
+        stamp = f"{main_clk}{(' ' + added) if added else ''}"
+        st.caption(f"Saved against the match clock ({stamp}) and included in the "
+                   "post-match report.")
+    if saved:
+        # Clear the box for the next note, then redraw the list.
+        st.session_state.pop(key, None)
+        st.rerun()
+    return saved
+
+
+def render_notes_list(limit=30, key_prefix="note"):
+    """The match notes, newest first, with their source and a delete button."""
+    notes = control.load_notes()
+    if not notes:
+        st.caption("No notes yet.")
+        return
+    shown = list(reversed(notes))[:limit]
+    for n in shown:
+        nc1, nc2 = st.columns([12, 1], vertical_alignment="center")
+        nc1.markdown(
+            f"<div class='kp-feed'><div class='body'><div class='top'>"
+            f"<span class='t'>{n.get('match_time') or ''}</span>"
+            f"&nbsp;&nbsp;{note_badge(n)}</div>"
+            f"<div class='sum'>{html.escape(n.get('text', ''))}</div>"
+            f"</div></div>", unsafe_allow_html=True)
+        if nc2.button("✕", key=f"{key_prefix}_del_{n['timestamp']}",
+                      help="Delete note"):
+            control.delete_note(n["timestamp"])
+            st.rerun()
+    if len(notes) > limit:
+        st.caption(f"Showing the {limit} most recent of {len(notes)} notes. "
+                   "All of them appear in the report and on Insights.")
+
+
+# --------------------------------------------------------------------------- #
+# The Eye (vision runner) — controls + live frame
+# --------------------------------------------------------------------------- #
+def render_eye_controls(state=None, key_prefix="eye"):
+    """Start / Pause / Stop for the vision runner.
+
+    Must be called OUTSIDE an auto-refreshing fragment: a fragment that reruns
+    every second can swallow a click before it registers. Returns the runner
+    status dict so callers can render around it without polling twice.
+    """
+    import vision_runner
+
+    state = control.load_control() if state is None else state
+    st_v = vision_runner.status()
+    supported, reason = vision_runner.is_supported()
+    ready = control.feed_ready(state)
+
+    cols = st.columns([1, 1, 1, 2.6], vertical_alignment="center")
+    if not st_v["running"]:
+        if cols[0].button("▶  Start Eye", type="primary", width="stretch",
+                          disabled=not (supported and ready),
+                          key=f"{key_prefix}_start"):
+            res = vision_runner.start(state)
+            if res.get("ok"):
+                st.toast(f"Eye started on {res['source']}.")
+            else:
+                st.session_state[f"{key_prefix}_error"] = res
+            st.rerun()
+    elif st_v["paused"]:
+        if cols[0].button("▶  Resume", type="primary", width="stretch",
+                          key=f"{key_prefix}_resume"):
+            vision_runner.resume()
+            st.rerun()
+    else:
+        if cols[0].button("⏸  Pause", width="stretch", key=f"{key_prefix}_pause"):
+            vision_runner.pause()
+            st.rerun()
+
+    if cols[1].button("⯀  Stop Eye", width="stretch",
+                      disabled=not st_v["running"], key=f"{key_prefix}_stop"):
+        with st.spinner("Saving the final checkpoint…"):
+            res = vision_runner.stop()
+        st.toast("Eye stopped." if res.get("ok") else res.get("error", ""))
+        st.rerun()
+
+    with cols[3]:
+        if not supported:
+            st.caption(reason)
+        elif not ready:
+            st.caption("No feed configured — set one up on **Camera & Feed**.")
+        elif st_v["running"]:
+            when = control.fmt_clock(st_v["elapsed"])
+            st.caption(f"Analysing {st_v['source_label']} · {when} elapsed"
+                       + (f" · match {st_v['match_time']}"
+                          if st_v["match_time"] else ""))
+        else:
+            st.caption(f"Ready to analyse {control.feed_label(state)}.")
+
+    err = st.session_state.get(f"{key_prefix}_error")
+    if err:
+        st.error(err.get("error", "Could not start the Eye."))
+        if err.get("detail"):
+            with st.expander("Runner output"):
+                st.code(err["detail"])
+
+    if st_v["ended_unexpectedly"] and not st_v["running"]:
+        st.warning("The Eye stopped on its own. The stream may have ended or "
+                   "dropped for good.")
+        with st.expander("Runner output"):
+            st.code(vision_runner.log_tail() or "(no output)")
+    elif st_v["health"] == "stale":
+        st.warning("The Eye is running but hasn't produced a frame recently — "
+                   "the feed may have stalled.")
+
+    return st_v
+
+
+def render_eye_frame(height=None):
+    """The latest annotated frame the runner wrote. Safe inside a fragment."""
+    import vision_runner
+
+    st_v = vision_runner.status()
+    path = vision_runner.SNAPSHOT_FILE
+    if not os.path.exists(path):
+        if st_v["running"]:
+            st.info("Waiting for the first annotated frame…")
+        else:
+            st.caption("No frame yet — start the Eye to see the live view.")
+        return
+
+    age = vision_runner.snapshot_age()
+    stamp = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(path)))
+    caption = f"Latest annotated frame · {stamp}"
+    if age is not None and age > 15 and st_v["running"] and not st_v["paused"]:
+        caption += f" · {int(age)}s old"
+    st.image(path, width="stretch", caption=caption)
 
 
 def render_scoreboard():

@@ -34,6 +34,7 @@ _REPORT_ARTIFACTS = {
     "events_csv": ("events_csv", "Events (CSV)"),
     "team_csv": ("team_csv", "Team stats (CSV)"),
     "players_csv": ("player_csv", "Player stats (CSV)"),
+    "report_json": ("data_json", "Report payload (JSON)"),
     "data": ("data_json", "Raw match data (JSON)"),
 }
 

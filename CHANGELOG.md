@@ -23,6 +23,87 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.12.0] - 2026-08-17
+
+Vision-first ingest. The camera feed becomes the primary way to capture a match
+and voice becomes an explicit backup lane, with the navigation reorganised around
+the match-day lifecycle. Plan: `UI_INGEST_PLAN.md`.
+
+### Added
+
+- **`vision_runner.py`** — supervises the persistent vision runner (the Eye) from
+  the app: `start` / `stop` / `pause` / `resume` / `status` / `reconcile`, over a
+  `vision_runner.json` state file with PID liveness checks, mirroring
+  `screen_recorder.py`. The Eye can now be started and stopped from the UI; it
+  previously required pasting a `scripts/live_vision.py` command into a terminal.
+- **`pages/Camera_and_Feed.py`** — the new front door for ingest: feed source
+  (Veo stream / webcam / file), a **Test connection** button that grabs one frame
+  and reports its resolution, model and device settings, pitch calibration
+  promoted to a first-class section, and the ingest-mode switch.
+- **`ingest_mode` and `feed` in `control.json`** — one persisted source of truth
+  for the feed, read by the app, the launcher and the runner. Old control files
+  merge cleanly with no migration.
+- **`vision/runtime.py`** — shared device selection (`best_device`,
+  `resolve_device`) and live pipeline config, so the page, the runner and the
+  supervisor build identical pipelines.
+- **`vision/render.py`** — shared drawing (annotated frames, tactical map with
+  its overlay layers, passing map), replacing the near-duplicate `annotate` the
+  live runner carried.
+- **Runner health file** (`live_eye_status.json`) — the Eye publishes frames,
+  fps, ball-detection rate, possession, passes and match time roughly once a
+  second, so the app's chips read a tiny file instead of re-parsing the
+  multi-megabyte `match_stats.json`.
+- **Ingest-aware status chips** — the status bar now shows the Eye's health,
+  fps, ball rate, possession and passes, and only renders the voice chips when
+  the match uses the mic.
+- **Written match notes.** A **Match notes** section on the Match Console with a
+  proper composer: type a note, and it is stamped with the match clock and saved
+  alongside spoken notes in `notes.json` — so it flows into the post-match report
+  and the library archive identically. The section always renders, whatever the
+  ingest mode; previously notes were reachable only by speaking, which left a
+  vision-only match with no way to record an observation at all. When voice is
+  on, Write / Speak sit in tabs. Notes now carry a `source` field and are tagged
+  **WRITTEN** or **VOICE** on the console and on Insights (legacy notes, which
+  all came from the mic, read as voice).
+
+### Changed
+
+- **Navigation reorganised** to Set up → Live → Analysis → After match, with the
+  visual path leading each group. The Match Console is the default page. Page
+  files lost their numeric prefixes (`pages/4_Video_Analysis.py` →
+  `pages/Film_Room.py`, `pages/Audio_and_Mic.py` → `pages/Voice_Backup.py`,
+  `pages/Live_Match.py` → `pages/Match_Console.py`, and so on).
+- **Match Console rebuilt vision-first**: the Eye's live frame and controls sit
+  under the scoreboard, one transport drives the clock and every configured
+  ingest, **Half** idles the Eye without losing stats, and the voice sections
+  render only when the match uses voice.
+- **Voice demoted to a backup lane**: `kickoff.sh`, `kickoff.ps1` and
+  `desktop.py` start the audio tracker only when `ingest_mode` includes voice.
+  Voice remains fully functional — this changes defaults and framing, not
+  capability. Override with `KICKOFF_INGEST=both`.
+- **Film Room** (was Video Analysis) handles recorded files only, 965 → 401
+  lines. Its live stepping loop is gone: a live run belongs to the persistent
+  runner, which survives navigation, where the page's loop died the moment you
+  clicked away.
+- `launch-app`, `app-doctor` and `analyze-video` skills updated for the vision
+  path, ingest modes, and runner triage.
+
+### Fixed
+
+- **Stopping the Eye no longer blocks the UI for 20 seconds.** `stop()` waited on
+  process exit, but the runner spends that time tearing down torch's MPS context
+  *after* its final checkpoint has already landed. It now waits on the runner's
+  PID file — removed immediately after the checkpoint — and returns in ~0.1s,
+  reporting `checkpoint_saved` so an unconfirmed save is never silent.
+- **The Eye no longer looks dead while it is working.** Runner health was only
+  published at 10-second checkpoints, so the app showed "starting" for the first
+  frames of every run; status is now published about once a second, from before
+  the first frame.
+- A camera index reaching the runner as a digit string was resolved as a *file
+  path*; webcams now pass through a dedicated `--camera` flag.
+- A stale `.live_eye_paused` flag from a previous match no longer idles a newly
+  started run.
+
 ## [1.11.0] - 2026-06-26
 
 ### Changed

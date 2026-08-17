@@ -2,15 +2,19 @@
 """
 desktop.py — Kickoff Pulse in a native desktop window.
 
-The browser launcher (kickoff.sh) opens the Streamlit dashboard in a browser
-tab. This launcher does the same thing but hosts the dashboard inside a native
-macOS window (via pywebview) so the app gets its own window and dock icon.
+The normal launcher (kickoff.sh) opens this native macOS window by default. It
+hosts the Streamlit dashboard inside pywebview so the app gets its own window
+and dock icon; set KICKOFF_UI=browser if you need the old browser-tab mode.
 
-It owns two child processes:
-  * audio_tracker.py — "The Ear + The Brain" (mic -> transcript -> JSON events)
+It owns up to two child processes:
   * streamlit         — "The Display", run headless on a local port
+  * audio_tracker.py  — "The Ear + The Brain" (mic -> transcript -> JSON events),
+                        started only when the match uses voice ingest
 
-When the window closes (or Cmd-Q), both children are stopped cleanly.
+The vision runner ("the Eye") is deliberately NOT a child: it is detached so it
+survives navigation and app restarts. Closing the window stops it anyway.
+
+When the window closes (or Cmd-Q), every process above is stopped cleanly.
 
 Run directly for testing:  .venv/bin/python desktop.py
 Normally launched by the "Kickoff Pulse.app" bundle.
@@ -101,14 +105,43 @@ def _shutdown() -> None:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+    # The Eye is deliberately detached (so it survives page navigation), which
+    # means it is not in _children. Closing the app is the one time it should
+    # stop; it checkpoints on the way out so no stats are lost.
+    try:
+        import vision_runner
+
+        vision_runner.stop()
+    except Exception:
+        pass
     print("[desktop] all child processes stopped.", flush=True)
+
+
+def _ingest_mode() -> str:
+    """Which ingest path this match uses: KICKOFF_INGEST wins, else control.json."""
+    forced = os.environ.get("KICKOFF_INGEST")
+    if forced:
+        return forced.strip().lower()
+    try:
+        import control
+
+        return control.load_control().get("ingest_mode", "vision")
+    except Exception:
+        return "vision"
 
 
 def main() -> int:
     os.chdir(ROOT)
 
-    # The Ear + The Brain: live mic -> transcript -> match_data.json
-    _spawn([sys.executable, "audio_tracker.py"], "audio tracker")
+    # The Ear + The Brain: live mic -> transcript -> match_data.json. Vision is
+    # the primary ingest, so the mic only comes up when this match uses it —
+    # otherwise the app holds the microphone open for nothing.
+    mode = _ingest_mode()
+    if mode in ("voice", "both"):
+        _spawn([sys.executable, "audio_tracker.py"], "audio tracker")
+    else:
+        print(f"[desktop] ingest mode {mode!r}: audio tracker not started.",
+              flush=True)
 
     # The Display: Streamlit, headless so it does NOT open a browser tab.
     _spawn(

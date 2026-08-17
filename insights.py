@@ -14,8 +14,8 @@ import re
 # goal dominates, shots/saves matter, and routine passes barely move it.
 WEIGHTS = {
     "goal": 6.0, "shot": 2.0, "save": 2.0, "tackle": 1.2, "interception": 1.2,
-    "clearance": 0.8, "corner": 1.0, "cross": 0.7, "dribble": 0.8, "pass": 0.3,
-    "offside": -0.5, "foul": -0.8, "substitution": 0.0,
+    "clearance": 0.8, "corner": 1.0, "cross": 0.8, "dribble": 0.8, "pass": 0.3,
+    "offside": -0.5, "foul": -1.0, "substitution": 0.0,
 }
 
 
@@ -204,13 +204,14 @@ def build_context(events: list, home: dict, away: dict, clock="") -> str:
 
 
 SYSTEM_PROMPT = (
-    "You are Kickoff Pulse, an elite, level-headed soccer (football) analyst. "
+    "You are Kickoff Pulse AI, an elite, level-headed soccer (football) analyst. "
     "You are given the live data and event log of a single match between two "
     "teams, Home and Away. Answer the user's question using ONLY that data. "
+    "Do NOT generate answers that arem't derived directly from the data/context provided."
     "Be concise and specific: cite the numbers and events that support your "
     "point. Stay analytical and neutral — no hype, no invented details. If the "
     "data is too thin to answer, say so briefly. 2-5 sentences unless asked for "
-    "more."
+    "more/a deeper analytical response."
 )
 
 # Preset one-tap questions for the analyst.
@@ -220,6 +221,8 @@ QUICK_PROMPTS = {
                      "and the key stats.",
     "Key moments": "What have been the most important moments or turning points "
                    "so far?",
-    "What to change": "For the team that is struggling, what is one concrete "
-                      "adjustment they should make?",
+    "What to change?": "For the team that is struggling, what is one concrete "
+                      "adjustment they should make, and why?",
+    "Who to sub?": "For the team that is struggling, what is one justifiable substitution "
+                      "they should make, and why?"
 }

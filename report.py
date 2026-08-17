@@ -5,6 +5,7 @@ Kickoff Pulse — report generator.
 Compiles the logged match data into:
   - an email-friendly plain-text report (reports/match_report_<ts>.txt)
   - a clean PDF report                  (reports/match_report_<ts>.pdf)
+  - a structured JSON report payload    (reports/match_report_<ts>_payload.json)
 and archives a copy of the raw data     (reports/match_data_<ts>.json)
 
 Usable from the command line:
@@ -19,7 +20,9 @@ import json
 import os
 import re
 import shutil
+import zipfile
 from datetime import datetime
+from xml.sax.saxutils import escape, quoteattr
 
 import control
 import insights as IN
@@ -51,17 +54,43 @@ def _event_time(e: dict) -> str:
 
 
 def _event_summary(e: dict) -> str:
-    parts = [p for p in [
-        e.get("action"),
-        e.get("result"),
-        (f"by {e['player']}" if e.get("player") else None),
-        (f"@ {e['location']}" if e.get("location") else None),
-    ] if p]
-    return " / ".join(parts) if parts else f'"{e.get("raw_text", "")}"'
+    when = _event_time(e)
+    action = e.get("action")
+    result = e.get("result")
+    raw_text = e.get("raw_text")
+    parts = [
+        f"[{when}]" if when else None,
+        e.get("team"),
+        f"{action} ({result})" if action and result else action or result,
+        f"by {e['player']}" if e.get("player") else None,
+        f"@ {e['location']}" if e.get("location") else None,
+        (f"status: {e['status']}" if e.get("status") != "approved"
+         and e.get("status") else None),
+        f'"{raw_text}"' if raw_text and not action else None,
+    ]
+    return " / ".join(str(p) for p in parts if p) or f'"{raw_text or ""}"'
 
 
 # Compact subset of stats worth splitting per half (keeps the table readable).
-HALF_STAT_KEYS = ["Goals", "Shots", "On Target", "Corners", "Fouls"]
+HALF_STAT_KEYS = [
+    "Goals", "Shots", "On Target", "Corners", "Fouls", "Passes",
+    "Possession %",
+]
+
+DERIVED_STAT_KEYS = [
+    "Shot Accuracy %",
+    "Shot Conversion %",
+    "Shots Off Target",
+    "Defensive Actions",
+    "Total Cards",
+]
+
+
+def _half_stat_pair(home_half: dict, away_half: dict, key: str) -> tuple:
+    if key == "Possession %":
+        hp, ap = S.possession(home_half, away_half)
+        return f"{hp}%", f"{ap}%"
+    return home_half.get(key, 0), away_half.get(key, 0)
 
 
 def _collect(events):
@@ -77,9 +106,25 @@ def _collect(events):
     }
 
 
+def _percentage(numerator: int, denominator: int) -> int:
+    return round(100 * numerator / denominator) if denominator else 0
+
+
 def _conversion(team: dict) -> int:
     """Goals-per-shot as a percentage (0 when no shots were taken)."""
-    return round(100 * team["Goals"] / team["Shots"]) if team["Shots"] else 0
+    return _percentage(team.get("Goals", 0), team.get("Shots", 0))
+
+
+def _derived_stats(block: dict) -> dict:
+    shots = block.get("Shots", 0)
+    on_target = block.get("On Target", 0)
+    return {
+        "Shot Accuracy %": _percentage(on_target, shots),
+        "Shot Conversion %": _conversion(block),
+        "Shots Off Target": max(shots - on_target, 0),
+        "Defensive Actions": block.get("Saves", 0) + block.get("Tackles", 0),
+        "Total Cards": block.get("Yellow Cards", 0) + block.get("Red Cards", 0),
+    }
 
 
 def scoring_summary(events) -> list:
@@ -99,10 +144,23 @@ def scoring_summary(events) -> list:
 
 def _potm_score(p: dict) -> float:
     """Heuristic standout-performer score from a player's stat block."""
-    return (p.get("Goals", 0) * 3.0 + p.get("On Target", 0) * 1.5
-            + p.get("Shots", 0) * 0.5 + p.get("Saves", 0) * 1.0
-            + p.get("Tackles", 0) * 0.8
-            - p.get("Yellow Cards", 0) * 1.0 - p.get("Red Cards", 0) * 3.0)
+    defensive_score = (
+        p.get("Tackles", 0) * 1.6
+        + p.get("Interceptions", 0) * 1.4
+        + p.get("Blocks", 0) * 1.3
+        + p.get("Clearances", 0) * 1.1
+        + p.get("Recoveries", 0) * 0.7
+    )
+    return (
+        p.get("Goals", 0) * 3.0
+        + p.get("On Target", 0) * 1.5
+        + p.get("Shots", 0) * 0.5
+        + p.get("Saves", 0) * 0.9
+        + defensive_score
+        - p.get("Fouls", 0) * 0.4
+        - p.get("Yellow Cards", 0) * 1.0
+        - p.get("Red Cards", 0) * 3.0
+    )
 
 
 def player_of_match(players: dict):
@@ -121,52 +179,498 @@ def player_of_match(players: dict):
     return name, p, round(score, 1)
 
 
+def _count_phrase(n: int, singular: str, plural: str = None) -> str:
+    return f"{n} {singular if n == 1 else plural or singular + 's'}"
+
+
+def _post_match_summary_lines(events, data, summary) -> list:
+    """Blend coach notes with a concise automatic match story."""
+    summary = str(summary or "").strip()
+
+    home, away = data["home"], data["away"]
+    hg, ag = home.get("Goals", 0), away.get("Goals", 0)
+    if hg > ag:
+        result = f"Result: Home won {hg}-{ag}."
+    elif ag > hg:
+        result = f"Result: Away won {ag}-{hg}."
+    else:
+        result = f"Result: Match finished level at {hg}-{ag}."
+
+    hp, ap = S.possession(home, away)
+    lines = [
+        result,
+        (f"Control: Possession Home {hp}%-{ap}% Away; shots "
+         f"{home.get('Shots', 0)}-{away.get('Shots', 0)}, on target "
+         f"{home.get('On Target', 0)}-{away.get('On Target', 0)}."),
+    ]
+
+    goals = scoring_summary(events)
+    if goals:
+        shown = []
+        for g in goals[:5]:
+            who = f" ({g['player']})" if g.get("player") else ""
+            when = f"{g['time']} " if g.get("time") else ""
+            shown.append(f"{when}{g['team']}{who}")
+        more = (
+            f"; +{len(goals) - len(shown)} more"
+            if len(goals) > len(shown) else ""
+        )
+        lines.append(f"Scoring: {'; '.join(shown)}{more}.")
+    else:
+        lines.append("Scoring: No goals recorded.")
+
+    leader, _strength = IN.momentum_leader(events)
+    lines.append(
+        f"Momentum: {leader} finished with the late pressure."
+        if leader else
+        "Momentum: Final pressure was balanced."
+    )
+
+    potm = player_of_match(data.get("players", {}))
+    if potm:
+        name, block, _score = potm
+        bits = []
+        for key, singular, plural in (
+            ("Goals", "goal", None),
+            ("On Target", "shot on target", "shots on target"),
+            ("Saves", "save", None),
+            ("Tackles", "tackle", None),
+        ):
+            value = block.get(key, 0)
+            if value:
+                bits.append(_count_phrase(value, singular, plural))
+        if not bits and block.get("Events"):
+            bits.append(_count_phrase(block["Events"], "logged event"))
+        team = f" ({block.get('Team')})" if block.get("Team") else ""
+        detail = ", ".join(bits) if bits else "top overall impact"
+        lines.append(f"Standout: {name}{team} - {detail}.")
+
+    if summary:
+        notes = [line.strip() for line in summary.splitlines() if line.strip()]
+        if notes:
+            lines.append("Coach notes:")
+            lines.extend(f"- {line}" for line in notes)
+
+    return lines
+
+
+_NOTE_GROUP_KEYS = (
+    ("audio", "audio"),
+    ("audio_notes", "audio"),
+    ("voice", "audio"),
+    ("voice_notes", "audio"),
+    ("recorded", "audio"),
+    ("recorded_notes", "audio"),
+    ("written", "written"),
+    ("written_notes", "written"),
+    ("manual", "written"),
+    ("manual_notes", "written"),
+    ("typed", "written"),
+    ("typed_notes", "written"),
+)
+
+_SINGLE_NOTE_KEYS = {"text", "note", "content", "body", "match_time",
+                     "timestamp"}
+
+
+def _note_value(note: dict, keys) -> str:
+    for key in keys:
+        value = note.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _note_source(note: dict, default_source: str = None) -> str:
+    for key in ("source", "kind", "type", "mode"):
+        value = str(note.get(key) or "").lower()
+        if any(x in value for x in ("written", "manual", "typed", "text")):
+            return "written"
+        if any(x in value for x in ("audio", "voice", "spoken", "record")):
+            return "audio"
+    if default_source:
+        return default_source
+    return "audio" if note.get("audio") else "written"
+
+
+def _normalize_note(note, default_source: str = None):
+    if isinstance(note, dict):
+        raw = note
+    else:
+        raw = {"text": note}
+
+    text = _note_value(raw, ("text", "note", "content", "body")).strip()
+    if not text:
+        return None
+
+    return {
+        "match_time": _note_value(raw, ("match_time", "clock", "time")),
+        "text": text,
+        "source": _note_source(raw, default_source),
+    }
+
+
+def _collect_notes(value, groups: dict, default_source: str) -> None:
+    if not value:
+        return
+    if isinstance(value, dict):
+        if any(key in value for key in _SINGLE_NOTE_KEYS):
+            note = _normalize_note(value, default_source)
+            if note:
+                groups[note["source"]].append(note)
+            return
+        for key, source in _NOTE_GROUP_KEYS:
+            _collect_notes(value.get(key), groups, source)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_notes(item, groups, default_source)
+        return
+
+    note = _normalize_note(value, default_source)
+    if note:
+        groups[note["source"]].append(note)
+
+
+def _note_groups(notes=None, written_notes=None) -> dict:
+    groups = {"audio": [], "written": []}
+    _collect_notes(notes, groups, "audio")
+    _collect_notes(written_notes, groups, "written")
+    return groups
+
+
 # --------------------------------------------------------------------------- #
 # CSV exports (spreadsheet-friendly: open in Excel / Sheets for analysis)
 # --------------------------------------------------------------------------- #
-EVENT_CSV_FIELDS = ["match_time", "timestamp", "team", "player", "action",
-                    "result", "location", "status", "raw_text"]
+EVENT_CSV_PREFERRED_FIELDS = ["match_time", "timestamp", "team", "player",
+                              "action", "result", "location", "status",
+                              "raw_text"]
+
+
+def _event_csv_fields(events) -> list:
+    fields = list(EVENT_CSV_PREFERRED_FIELDS)
+    seen = set(fields)
+    for e in events:
+        for k in e:
+            if k not in seen:
+                seen.add(k)
+                fields.append(k)
+    return fields
+
+
+def _csv_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return value
 
 
 def build_events_csv(events) -> str:
     """The full event log as CSV — one row per event."""
+    fields = _event_csv_fields(events)
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=EVENT_CSV_FIELDS,
-                            extrasaction="ignore")
-    writer.writeheader()
+    writer = csv.writer(buf)
+    writer.writerow(fields)
     for e in events:
-        writer.writerow({k: e.get(k, "") for k in EVENT_CSV_FIELDS})
+        writer.writerow([_csv_value(e.get(k)) for k in fields])
     return buf.getvalue()
 
 
-def build_team_stats_csv(data) -> str:
-    """Head-to-head team stats as CSV (Stat, Home, Away), possession first."""
+def _team_stats_rows(data) -> list:
     home, away = data["home"], data["away"]
     hp, ap = S.possession(home, away)
+    home_extra, away_extra = _derived_stats(home), _derived_stats(away)
+    rows = [["Stat", "Home", "Away"], ["Possession %", hp, ap]]
+    rows.extend([k, home_extra[k], away_extra[k]] for k in DERIVED_STAT_KEYS)
+    rows.extend([k, home.get(k, 0), away.get(k, 0)] for k in S.STAT_KEYS)
+    seen = {"Possession %", *DERIVED_STAT_KEYS, *S.STAT_KEYS}
+    for block in (home, away):
+        for k in block:
+            if k not in seen:
+                seen.add(k)
+                rows.append([k, home.get(k, 0), away.get(k, 0)])
+    return rows
+
+
+def _player_stats_rows(data) -> list:
+    players = data["players"]
+    cols = ["Player", "Team", "Events"] + S.STAT_KEYS + DERIVED_STAT_KEYS
+    ordered = sorted(players.items(),
+                     key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
+                     reverse=True)
+    rows = [cols]
+    for name, p in ordered:
+        extra = _derived_stats(p)
+        rows.append([name, p.get("Team") or "", p.get("Events", 0)]
+                    + [p.get(k, 0) for k in S.STAT_KEYS]
+                    + [extra[k] for k in DERIVED_STAT_KEYS])
+    return rows
+
+
+def build_team_stats_csv(data) -> str:
+    """Head-to-head team stats as CSV (Stat, Home, Away)."""
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["Stat", "Home", "Away"])
-    writer.writerow(["Possession %", hp, ap])
-    writer.writerow(["Shot Conversion %", _conversion(home), _conversion(away)])
-    for k in S.STAT_KEYS:
-        writer.writerow([k, home.get(k, 0), away.get(k, 0)])
+    writer.writerows(_team_stats_rows(data))
     return buf.getvalue()
 
 
 def build_player_stats_csv(data) -> str:
     """Per-player stats as CSV, ordered by goals then activity."""
-    players = data["players"]
-    cols = ["Player", "Team", "Events"] + S.STAT_KEYS
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(cols)
-    ordered = sorted(players.items(),
-                     key=lambda kv: (kv[1]["Goals"], kv[1]["Events"]),
-                     reverse=True)
-    for name, p in ordered:
-        writer.writerow([name, p.get("Team") or "", p.get("Events", 0)]
-                        + [p.get(k, 0) for k in S.STAT_KEYS])
+    writer.writerows(_player_stats_rows(data))
     return buf.getvalue()
+
+
+def _xlsx_col(n: int) -> str:
+    letters = []
+    while n:
+        n, rem = divmod(n - 1, 26)
+        letters.append(chr(65 + rem))
+    return "".join(reversed(letters))
+
+
+def _xlsx_sheet(rows) -> str:
+    out = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<worksheet xmlns="http://schemas.openxmlformats.org/'
+        'spreadsheetml/2006/main"><sheetData>',
+    ]
+    for r_idx, row in enumerate(rows, 1):
+        cells = []
+        for c_idx, value in enumerate(row, 1):
+            if value is None or value == "":
+                continue
+            ref = f"{_xlsx_col(c_idx)}{r_idx}"
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            else:
+                cells.append(
+                    f'<c r="{ref}" t="inlineStr"><is><t>'
+                    f'{escape(str(value))}</t></is></c>')
+        out.append(f'<row r="{r_idx}">{"".join(cells)}</row>')
+    out.append("</sheetData></worksheet>")
+    return "".join(out)
+
+
+def build_stats_xlsx(data, path) -> None:
+    """Write team and player stats to separate workbook tabs."""
+    sheets = [
+        ("Team Stats", _team_stats_rows(data)),
+        ("Player Stats", _player_stats_rows(data)),
+    ]
+    workbook_sheets = "".join(
+        f'<sheet name={quoteattr(name)} sheetId="{idx}" r:id="rId{idx}"/>'
+        for idx, (name, _rows) in enumerate(sheets, 1)
+    )
+    overrides = "".join(
+        '<Override PartName="/xl/worksheets/sheet{idx}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.'
+        'spreadsheetml.worksheet+xml"/>'.format(idx=idx)
+        for idx in range(1, len(sheets) + 1)
+    )
+    rels = "".join(
+        '<Relationship Id="rId{idx}" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet{idx}.xml"/>'.format(idx=idx)
+        for idx in range(1, len(sheets) + 1)
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Types xmlns="http://schemas.openxmlformats.org/package/'
+                   '2006/content-types"><Default Extension="rels" '
+                   'ContentType="application/vnd.openxmlformats-package.'
+                   'relationships+xml"/><Default Extension="xml" '
+                   'ContentType="application/xml"/><Override '
+                   'PartName="/xl/workbook.xml" ContentType="application/vnd.'
+                   'openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                   f'{overrides}</Types>')
+        z.writestr("_rels/.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                   'package/2006/relationships"><Relationship Id="rId1" '
+                   'Type="http://schemas.openxmlformats.org/officeDocument/'
+                   '2006/relationships/officeDocument" '
+                   'Target="xl/workbook.xml"/></Relationships>')
+        z.writestr("xl/workbook.xml",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<workbook xmlns="http://schemas.openxmlformats.org/'
+                   'spreadsheetml/2006/main" xmlns:r="http://schemas.'
+                   'openxmlformats.org/officeDocument/2006/relationships">'
+                   f'<sheets>{workbook_sheets}</sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                   f'package/2006/relationships">{rels}</Relationships>')
+        for idx, (_name, rows) in enumerate(sheets, 1):
+            z.writestr(f"xl/worksheets/sheet{idx}.xml", _xlsx_sheet(rows))
+
+
+def _dict_rows(rows) -> list:
+    if not rows:
+        return []
+    headers = rows[0]
+    return [dict(zip(headers, row)) for row in rows[1:]]
+
+
+def build_json_payload(events, data, summary, clock, match_name="",
+                       lineups=None, notes=None, written_notes=None) -> dict:
+    """Typed report blocks suitable for storing/indexing in the library DB."""
+    home, away = data["home"], data["away"]
+    hp, ap = S.possession(home, away)
+    home_extra, away_extra = _derived_stats(home), _derived_stats(away)
+    leader, strength = IN.momentum_leader(events)
+    note_groups = _note_groups(notes, written_notes)
+    generated_at = datetime.now().isoformat(timespec="seconds")
+
+    blocks = [
+        {
+            "id": "metadata",
+            "type": "metadata",
+            "title": "Metadata",
+            "payload": {
+                "match_name": match_name or "Match",
+                "match_date": _match_date(events),
+                "generated_at": generated_at,
+                "clock": clock,
+                "event_count": len(events),
+                "contact": "leif@leifheaney.com",
+            },
+        },
+        {
+            "id": "score",
+            "type": "score",
+            "title": "Final Score",
+            "payload": {
+                "home": home.get("Goals", 0),
+                "away": away.get("Goals", 0),
+            },
+        },
+        {
+            "id": "team_stats",
+            "type": "table",
+            "title": "Team Stats",
+            "payload": {"rows": _dict_rows(_team_stats_rows(data))},
+        },
+        {
+            "id": "half_stats",
+            "type": "table",
+            "title": "By Half",
+            "payload": {
+                "rows": [
+                    {
+                        "Stat": key,
+                        "1st Home": first_home,
+                        "1st Away": first_away,
+                        "2nd Home": second_home,
+                        "2nd Away": second_away,
+                    }
+                    for key in HALF_STAT_KEYS
+                    for first_home, first_away in [
+                        _half_stat_pair(data["home_halves"]["1st"],
+                                        data["away_halves"]["1st"], key)
+                    ]
+                    for second_home, second_away in [
+                        _half_stat_pair(data["home_halves"]["2nd"],
+                                        data["away_halves"]["2nd"], key)
+                    ]
+                ],
+            },
+        },
+        {
+            "id": "efficiency",
+            "type": "metrics",
+            "title": "Efficiency & Possession",
+            "payload": {
+                "possession": {"home": hp, "away": ap},
+                "shot_accuracy": {
+                    "home": home_extra["Shot Accuracy %"],
+                    "away": away_extra["Shot Accuracy %"],
+                },
+                "shot_conversion": {
+                    "home": _conversion(home),
+                    "away": _conversion(away),
+                },
+                "momentum": {"leader": leader, "strength": strength},
+            },
+        },
+        {
+            "id": "summary",
+            "type": "text",
+            "title": "Post-Match Summary",
+            "payload": {
+                "raw": str(summary or ""),
+                "lines": _post_match_summary_lines(events, data, summary),
+            },
+        },
+        {
+            "id": "scoring_summary",
+            "type": "list",
+            "title": "Scoring Summary",
+            "payload": {"goals": scoring_summary(events)},
+        },
+        {
+            "id": "player_stats",
+            "type": "table",
+            "title": "Player Stats",
+            "payload": {"rows": _dict_rows(_player_stats_rows(data))},
+        },
+        {
+            "id": "events",
+            "type": "event_log",
+            "title": "Events",
+            "payload": {
+                "items": [
+                    {**event, "time": _event_time(event),
+                     "summary": _event_summary(event)}
+                    for event in events
+                ],
+            },
+        },
+    ]
+
+    if control.has_lineups(lineups):
+        blocks.insert(2, {
+            "id": "lineups",
+            "type": "lineups",
+            "title": "Starting Lineups",
+            "payload": {
+                team.lower(): {
+                    "heading": _lineup_heading(lineups, team),
+                    "players": _roster_lines(lineups, team),
+                }
+                for team in ("Home", "Away")
+            },
+        })
+
+    potm = player_of_match(data.get("players", {}))
+    if potm:
+        name, stat_block, score = potm
+        blocks.append({
+            "id": "player_of_match",
+            "type": "spotlight",
+            "title": "Player Of The Match",
+            "payload": {"player": name, "score": score, "stats": stat_block},
+        })
+
+    for source, title in (("audio", "Audio Notes"), ("written", "Written Notes")):
+        if note_groups[source]:
+            blocks.append({
+                "id": f"{source}_notes",
+                "type": "notes",
+                "title": title,
+                "payload": {"items": note_groups[source]},
+            })
+
+    return {
+        "schema": "kickoff.report_payload.v1",
+        "generated_at": generated_at,
+        "match_name": match_name or "Match",
+        "blocks": blocks,
+    }
 
 
 def _roster_lines(lineups, team) -> list:
@@ -191,8 +695,9 @@ def _lineup_heading(lineups, team) -> str:
 # Plain-text report
 # --------------------------------------------------------------------------- #
 def build_text(events, data, summary, clock, match_name="", lineups=None,
-               notes=None) -> str:
+               notes=None, written_notes=None) -> str:
     home, away = data["home"], data["away"]
+    match_date = _match_date(events)
     L = []
     w = 56
 
@@ -204,7 +709,8 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     rule()
     if match_name:
         L.append(match_name.center(w))
-        L.append("")
+    L.append(match_date.center(w))
+    L.append("")
     L.append(f"Generated : {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     L.append("Contact   : leif@leifheaney.com")
     if clock:
@@ -232,8 +738,8 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     rule("-")
     L.append(f"{'HOME':>10}   {'STAT':^18}   {'AWAY':<10}")
     rule("-")
-    for k in S.STAT_KEYS:
-        L.append(f"{str(home[k]):>10}   {k:^18}   {str(away[k]):<10}")
+    for k, h_val, a_val in _team_stats_rows(data)[1:]:
+        L.append(f"{str(h_val):>10}   {k:^18}   {str(a_val):<10}")
     L.append("")
 
     # Per-half breakdown (key stats only) — explicit Home/Away per half
@@ -244,16 +750,24 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     L.append(f"{'':<12}{'1st Half':^12}{'':<3}{'2nd Half':^12}")
     L.append(f"{'':<12}{'Home':>6}{'Away':>6}{'':<3}{'Home':>6}{'Away':>6}")
     for k in HALF_STAT_KEYS:
-        L.append(f"{k:<12}{h1['1st'][k]:>6}{h2['1st'][k]:>6}{'':<3}"
-                 f"{h1['2nd'][k]:>6}{h2['2nd'][k]:>6}")
+        h_1st, a_1st = _half_stat_pair(h1["1st"], h2["1st"], k)
+        h_2nd, a_2nd = _half_stat_pair(h1["2nd"], h2["2nd"], k)
+        L.append(f"{k:<12}{h_1st:>6}{a_1st:>6}{'':<3}"
+                 f"{h_2nd:>6}{a_2nd:>6}")
     L.append("")
 
     # Efficiency & possession
     hp, ap = S.possession(home, away)
+    home_extra, away_extra = _derived_stats(home), _derived_stats(away)
     rule("-")
     L.append("EFFICIENCY & POSSESSION")
     rule("-")
     L.append(f"{f'{hp}%':>10}   {'Possession (est)':^18}   {f'{ap}%':<10}")
+    h_acc, a_acc = (
+        f"{home_extra['Shot Accuracy %']}%",
+        f"{away_extra['Shot Accuracy %']}%",
+    )
+    L.append(f"{h_acc:>10}   {'Shot Accuracy':^18}   {a_acc:<10}")
     L.append(f"{f'{_conversion(home)}%':>10}   {'Shot Conversion':^18}   "
              f"{f'{_conversion(away)}%':<10}")
     leader, _strength = IN.momentum_leader(events)
@@ -261,21 +775,22 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
         L.append(f"  {leader} finished the stronger side.")
     L.append("")
 
-    # Post-match summary
-    if summary:
-        rule("-")
-        L.append("POST-MATCH SUMMARY")
-        rule("-")
-        for line in summary.splitlines() or [summary]:
-            L.append(line)
-        L.append("")
+    summary_lines = _post_match_summary_lines(events, data, summary)
+    rule("-")
+    L.append("POST-MATCH SUMMARY")
+    rule("-")
+    L.extend(summary_lines)
+    L.append("")
 
-    # Recorded thoughts / notes
-    if notes:
+    note_groups = _note_groups(notes, written_notes)
+    for title, items in (("AUDIO NOTES", note_groups["audio"]),
+                         ("WRITTEN NOTES", note_groups["written"])):
+        if not items:
+            continue
         rule("-")
-        L.append("MATCH NOTES")
+        L.append(title)
         rule("-")
-        for n in notes:
+        for n in items:
             mt = n.get("match_time") or ""
             L.append(f"  [{mt:>6}]  {n.get('text', '')}")
         L.append("")
@@ -305,12 +820,13 @@ def _pdf_safe(s) -> str:
 # PDF report
 # --------------------------------------------------------------------------- #
 def build_pdf(events, data, summary, clock, path,
-              match_name="", lineups=None, notes=None, momentum_png=None,
-              home_logo=None, away_logo=None):
+              match_name="", lineups=None, notes=None, written_notes=None,
+              momentum_png=None, home_logo=None, away_logo=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
     home, away = data["home"], data["away"]
+    match_date = _match_date(events)
     hp, ap = S.possession(home, away)
 
     CONTACT = "leif@leifheaney.com"
@@ -385,6 +901,9 @@ def build_pdf(events, data, summary, clock, path,
     pdf.set_text_color(*INK)
     pdf.cell(0, 6, _pdf_safe(match_name or "Match"), align="R",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 5, _pdf_safe(match_date), align="R",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_y(max(pdf.get_y(), top + logo_h) + 1)
     meta = f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}   |   {CONTACT}"
     if clock:
@@ -443,6 +962,96 @@ def build_pdf(events, data, summary, clock, path,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
     pdf.set_y(y0 + band + 4)
 
+    scorers = scoring_summary(events)
+    potm = player_of_match(data.get("players", {}))
+    if scorers or potm:
+        section("Match Snapshot")
+        y0 = pdf.get_y()
+        gap = 4
+        colw = (epw - gap) / 2
+        scorer_rows = scorers[:5]
+        box_h = max(30, 14 + max(len(scorer_rows), 1) * 5
+                    + (5 if len(scorers) > len(scorer_rows) else 0))
+        rx = lm + colw + gap
+
+        def team_color(team):
+            if team == "Home":
+                return HOME_RGB
+            if team == "Away":
+                return AWAY_RGB
+            return INK
+
+        for x in (lm, rx):
+            pdf.set_fill_color(*CARD)
+            pdf.set_draw_color(*LINE)
+            pdf.rect(x, y0, colw, box_h, style="DF")
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*MUTED)
+        pdf.set_xy(lm + 3, y0 + 2)
+        pdf.cell(colw - 6, 5, "SCORING SUMMARY")
+        y = y0 + 8
+        if scorer_rows:
+            for goal in scorer_rows:
+                team = goal.get("team") or "-"
+                pdf.set_xy(lm + 3, y)
+                pdf.set_font("Helvetica", "B", 8)
+                pdf.set_text_color(*MUTED)
+                pdf.cell(17, 5, _pdf_safe(goal.get("time") or "-"))
+                pdf.set_text_color(*team_color(team))
+                pdf.cell(18, 5, _pdf_safe(team.upper()[:8]))
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*INK)
+                pdf.cell(colw - 41, 5, _pdf_safe((goal.get("player")
+                                                   or "Goal")[:30]))
+                y += 5
+            if len(scorers) > len(scorer_rows):
+                pdf.set_xy(lm + 3, y)
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*MUTED)
+                pdf.cell(colw - 6, 5,
+                         f"+{len(scorers) - len(scorer_rows)} more goals")
+        else:
+            pdf.set_xy(lm + 3, y)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(colw - 6, 5, "No goals recorded")
+
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(*MUTED)
+        pdf.set_xy(rx + 3, y0 + 2)
+        pdf.cell(colw - 6, 5, "PLAYER OF THE MATCH")
+        if potm:
+            name, block, score = potm
+            team = block.get("Team") or "-"
+            pdf.set_xy(rx + 3, y0 + 8)
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_text_color(*team_color(team))
+            pdf.cell(colw - 6, 6, _pdf_safe(name[:34]))
+            pdf.set_xy(rx + 3, y0 + 15)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(colw - 6, 5, _pdf_safe(f"{team}  |  Impact {score}"))
+            bits = []
+            for key, label in (
+                ("Goals", "G"), ("On Target", "SOT"), ("Saves", "SV"),
+                ("Tackles", "TKL"), ("Events", "EV"),
+            ):
+                value = block.get(key, 0)
+                if value:
+                    bits.append(f"{value} {label}")
+            pdf.set_xy(rx + 3, y0 + 21)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*INK)
+            pdf.cell(colw - 6, 5, _pdf_safe(", ".join(bits)[:52]))
+        else:
+            pdf.set_xy(rx + 3, y0 + 8)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(colw - 6, 5, "No standout selected")
+
+        pdf.set_y(y0 + box_h + 4)
+
     # ---- Possession & efficiency (boxed) ---------------------------------- #
     section("Possession & Efficiency")
     y0 = pdf.get_y()
@@ -462,9 +1071,15 @@ def build_pdf(events, data, summary, clock, path,
     pdf.ln(bh + 2)
     leader, _strength = IN.momentum_leader(events)
     momentum = f"{leader} finished stronger" if leader else "Even"
+    home_extra, away_extra = _derived_stats(home), _derived_stats(away)
     pdf.set_x(lm + 4)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*MUTED)
+    pdf.cell(0, 6, _pdf_safe(
+        f"Shot accuracy: Home {home_extra['Shot Accuracy %']}%  /  Away "
+        f"{away_extra['Shot Accuracy %']}%"),
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_x(lm + 4)
     pdf.cell(0, 6, _pdf_safe(
         f"Shot conversion: Home {_conversion(home)}%  /  Away "
         f"{_conversion(away)}%        Momentum: {momentum}"),
@@ -527,18 +1142,18 @@ def build_pdf(events, data, summary, clock, path,
     pdf.cell(epw * 0.25, 7, "AWAY", align="C", fill=True,
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     fill = False
-    for k in S.STAT_KEYS:
+    for k, h_val, a_val in _team_stats_rows(data)[1:]:
         pdf.set_x(lm)
         pdf.set_fill_color(*(SHADE if fill else (255, 255, 255)))
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*HOME_RGB)
-        pdf.cell(epw * 0.25, 7, str(home[k]), align="C", fill=True)
+        pdf.cell(epw * 0.25, 7, str(h_val), align="C", fill=True)
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*INK)
         pdf.cell(epw * 0.50, 7, _pdf_safe(k), align="C", fill=True)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*AWAY_RGB)
-        pdf.cell(epw * 0.25, 7, str(away[k]), align="C", fill=True,
+        pdf.cell(epw * 0.25, 7, str(a_val), align="C", fill=True,
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         fill = not fill
     frame(y0)
@@ -574,7 +1189,10 @@ def build_pdf(events, data, summary, clock, path,
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*INK)
         pdf.cell(epw * 0.32, 6, _pdf_safe(" " + k), align="L", fill=True)
-        for hh, aa in ((h1["1st"][k], h2["1st"][k]), (h1["2nd"][k], h2["2nd"][k])):
+        for hh, aa in (
+            _half_stat_pair(h1["1st"], h2["1st"], k),
+            _half_stat_pair(h1["2nd"], h2["2nd"], k),
+        ):
             pdf.set_text_color(*HOME_RGB)
             pdf.cell(epw * 0.17, 6, str(hh), align="C", fill=True)
             pdf.set_text_color(*AWAY_RGB)
@@ -584,18 +1202,20 @@ def build_pdf(events, data, summary, clock, path,
     frame(y0)
     pdf.ln(3)
 
-    # ---- Post-match summary (optional) ------------------------------------ #
-    if summary:
-        section("Post-Match Summary")
-        pdf.set_font("Helvetica", "", 10)
-        pdf.set_text_color(*INK)
-        pdf.multi_cell(0, 6, _pdf_safe(summary))
-        pdf.ln(2)
+    summary_lines = _post_match_summary_lines(events, data, summary)
+    section("Post-Match Summary")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*INK)
+    pdf.multi_cell(0, 6, _pdf_safe("\n".join(summary_lines)))
+    pdf.ln(2)
 
-    # ---- Match notes (optional) ------------------------------------------- #
-    if notes:
-        section("Match Notes")
-        for n in notes:
+    note_groups = _note_groups(notes, written_notes)
+    for title, items in (("Audio Notes", note_groups["audio"]),
+                         ("Written Notes", note_groups["written"])):
+        if not items:
+            continue
+        section(title)
+        for n in items:
             pdf.set_x(lm)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*MUTED)
@@ -644,11 +1264,12 @@ def _match_date(events) -> str:
 
 def generate(events=None, summary="", clock="", out_dir=None,
              data_file=None, archive=True, match_name="", lineups=None,
-             notes=None, home_logo=None, away_logo=None) -> dict:
+             notes=None, written_notes=None, home_logo=None, away_logo=None) -> dict:
     """Generate txt + pdf reports (and archive data). Returns the paths.
 
     `home_logo`/`away_logo` are optional crest image paths; when omitted they
-    default to branding/teams/home.* and away.* if present.
+    default to branding/teams/home.* and away.* if present. `notes` are captured
+    voice notes by default; pass `written_notes` for typed coach notes.
     """
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
@@ -672,6 +1293,8 @@ def generate(events=None, summary="", clock="", out_dir=None,
     events_csv_path = os.path.join(out_dir, f"{base}_events.csv")
     team_csv_path = os.path.join(out_dir, f"{base}_team_stats.csv")
     player_csv_path = os.path.join(out_dir, f"{base}_player_stats.csv")
+    stats_xlsx_path = os.path.join(out_dir, f"{base}_stats.xlsx")
+    report_json_path = os.path.join(out_dir, f"{base}_report_payload.json")
 
     # Render the visual-timeline image as a standalone artifact (used by the
     # match library + downloads). It is intentionally NOT embedded in the PDF.
@@ -690,10 +1313,16 @@ def generate(events=None, summary="", clock="", out_dir=None,
 
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock, match_name, lineups,
-                            notes))
+                            notes, written_notes))
     build_pdf(events, data, summary, clock, pdf_path,
               match_name=match_name, lineups=lineups, notes=notes,
+              written_notes=written_notes,
               momentum_png=mom_path, home_logo=home_logo, away_logo=away_logo)
+    with open(report_json_path, "w", encoding="utf-8") as fh:
+        json.dump(
+            build_json_payload(events, data, summary, clock, match_name,
+                               lineups, notes, written_notes),
+            fh, ensure_ascii=False, separators=(",", ":"), default=str)
 
     # Spreadsheet-friendly data exports.
     for csv_path, content in (
@@ -703,11 +1332,13 @@ def generate(events=None, summary="", clock="", out_dir=None,
     ):
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
             fh.write(content)
+    build_stats_xlsx(data, stats_xlsx_path)
 
     result = {
         "txt": txt_path, "pdf": pdf_path, "events": len(events),
         "events_csv": events_csv_path, "team_csv": team_csv_path,
-        "players_csv": player_csv_path,
+        "players_csv": player_csv_path, "stats_xlsx": stats_xlsx_path,
+        "report_json": report_json_path,
     }
     if png_path and os.path.exists(png_path):
         result["image"] = png_path

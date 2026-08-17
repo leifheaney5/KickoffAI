@@ -10,6 +10,17 @@ a video file, writing a vision `match_stats` JSON. Tuned for the **uncalibrated,
 auto-following Veo camera** this project records (pans/zooms, no calibration), so
 results are directional, not metric.
 
+## Pick the right path first
+
+| Situation | Use |
+|---|---|
+| A match happening **now** | The app: **Camera & Feed** → test the feed → **Match Console** → Start. The Eye runs as a persistent process and survives navigation. No terminal needed. |
+| A recorded file, interactively | The app: **Film Room** — pick the file, Run analysis, review the tactical + passing maps. |
+| A recorded file, batch/tuned | This skill's CLI steps below — best for long runs, custom flags, or scripted work. |
+
+The CLI and the app share `vision/runtime.py` and `vision/render.py`, so a run
+started either way is configured and drawn the same.
+
 ## Prerequisites (check first)
 
 - Vision deps in `.venv` (`ultralytics`, `torch`, `cv2`) and the fine-tuned

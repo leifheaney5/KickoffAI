@@ -1,8 +1,9 @@
 # Match Library — setup
 
 The match library indexes every match and its artifacts in a database. Postgres
-is the intended backend (via Docker); without it the app falls back to a local
-SQLite file, so you can run everything with zero setup while developing.
+is the intended backend for live use (via Docker). Without it, the lower-level
+Python modules can still fall back to a local SQLite file for development, but
+the normal app launcher requires Postgres unless you explicitly opt into SQLite.
 
 ## Quick start (SQLite, no Docker)
 
@@ -12,6 +13,7 @@ repo root automatically.
 ```bash
 pip install -r requirements.txt
 python -c "import db; db.init_db()"      # creates the schema
+KICKOFF_ALLOW_SQLITE=1 ./kickoff.sh      # dev-only launcher fallback
 ```
 
 ## Postgres via Docker (recommended)
@@ -31,8 +33,9 @@ python -c "import db; db.init_db()"      # creates the schema
    python -c "import db; db.init_db()"
    ```
 
-   `kickoff.sh` auto-detects the Postgres container and sets this for you; add
-   the `export` to your shell profile if you run the app some other way.
+   `kickoff.sh` auto-detects the Postgres container and sets this for you. If it
+   cannot reach Postgres, it exits instead of silently using SQLite; add the
+   `export` to your shell profile if you run the app some other way.
 
 ### Services & ports
 
@@ -83,6 +86,30 @@ The `backup` service runs `pg_dump` on a schedule (`@daily`, 14-day / 4-week /
 ```bash
 docker exec kickoff-backup /backup.sh
 docker exec kickoff-backup ls -lh /backups/last
+```
+
+For a portable full backup that you can copy off-machine, use the repo script
+instead. It includes the Postgres dump, the `library/` media folder, and active
+runtime files such as notes and current match data:
+
+```bash
+scripts/backup_now.sh
+KICKOFF_BACKUP_DIR=/Volumes/USB/KickoffBackups scripts/backup_now.sh
+```
+
+Restore is intentionally guarded:
+
+```bash
+scripts/restore_backup.sh backups/kickoff_backup_YYYYmmdd_HHMMSS.tar.gz --force
+scripts/restore_backup.sh backups/kickoff_backup_YYYYmmdd_HHMMSS.tar.gz --force --with-live
+```
+
+If Postgres reports a collation-version warning after an image upgrade, run a
+fresh backup and refresh the database metadata:
+
+```bash
+scripts/backup_now.sh
+scripts/refresh_postgres_collation.sh --force
 ```
 
 ### Semantic search (pgvector + Ollama)

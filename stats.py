@@ -24,6 +24,7 @@ TEAMS = ("Home", "Away")
 STAT_KEYS = [
     "Goals", "Shots", "On Target", "Saves", "Tackles", "Fouls",
     "Yellow Cards", "Red Cards", "Corners", "Offsides", "Passes",
+    "Crosses", "Dribbles", "Interceptions", "Clearances", "Subs",
 ]
 
 
@@ -114,7 +115,7 @@ def _res(event: dict) -> str:
 
 def aggregate(rows: list) -> dict:
     """Compute the standard stat block for a list of events."""
-    actions = [e.get("action") for e in rows]
+    actions = Counter(e.get("action") for e in rows)
 
     def card(color: str) -> int:
         return sum(
@@ -130,17 +131,21 @@ def aggregate(rows: list) -> dict:
 
     return {
         "Goals": goals,
-        "Shots": sum(1 for a in actions if a == "shot") + goals,
+        "Shots": actions["shot"] + goals,
         "On Target": sum(1 for e in rows if on_target(e)) + goals,
-        "Saves": sum(1 for a in actions if a == "save"),
-        "Tackles": sum(1 for a in actions if a == "tackle"),
-        "Fouls": sum(1 for a in actions if a == "foul"),
+        "Saves": actions["save"],
+        "Tackles": actions["tackle"],
+        "Fouls": actions["foul"],
         "Yellow Cards": card("yellow"),
         "Red Cards": card("red"),
-        "Corners": sum(1 for a in actions if a == "corner"),
-        "Offsides": sum(1 for a in actions if a == "offside"),
-        "Passes": sum(1 for a in actions if a == "pass"),
-        "Subs": sum(1 for a in actions if a == "substitution"),
+        "Corners": actions["corner"],
+        "Offsides": actions["offside"],
+        "Passes": actions["pass"],
+        "Crosses": actions["cross"],
+        "Dribbles": actions["dribble"],
+        "Interceptions": actions["interception"],
+        "Clearances": actions["clearance"],
+        "Subs": actions["substitution"],
     }
 
 
@@ -208,6 +213,9 @@ _POSSESSION_WEIGHTS = {
     "Shots": 1.0,
     "On Target": 0.5,
     "Corners": 0.5,
+    "Crosses": 0.8,
+    "Dribbles": 0.8,
+    "Offsides": 0.5,
     "Goals": 1.0,
 }
 
@@ -228,5 +236,3 @@ def possession(home: dict, away: dict) -> tuple:
         return 50, 50
     hp = round(h / total * 100)
     return hp, 100 - hp
-
-

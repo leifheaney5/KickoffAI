@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""live_vision.py — run the vision pipeline (the Eye) as a standalone, persistent
+background process, decoupled from the Streamlit UI.
+
+Unlike the Video Analysis page (whose stepping loop only runs while that page is
+the active script), this keeps capturing the whole match no matter what you click
+in the app. It checkpoints periodically so the app sees live results:
+
+  * match_stats.json  — the full vision document (overwritten each checkpoint)
+  * match_data.json   — vision passes bridged into the dashboard event log
+
+Run it:
+
+    .venv/bin/python scripts/live_vision.py \
+        --video "https://www.youtube.com/watch?v=VjsRuzSu0qU" \
+        --model soccer_yolov8m_v1.pt --device mps
+
+Stop it cleanly with Ctrl-C (or `kill <pid>`); it writes a final checkpoint and
+removes its PID file on exit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+# Make the repo-root modules importable no matter where this is launched from.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from vision import MatchAnalyzer, PipelineConfig  # noqa: E402
+from vision import bridge as vbridge  # noqa: E402
+from vision.runtime import live_config  # noqa: E402
+from vision.schema import MatchStats  # noqa: E402
+
+_STOP = False
+
+
+def _request_stop(signum, frame):  # noqa: ARG001
+    global _STOP
+    _STOP = True
+
+
+def write_snapshot(path: str, frame, detections, record) -> None:
+    """Atomically write the latest annotated frame so the viewer never tears."""
+    import cv2
+
+    from vision.render import annotate_with_clock
+
+    img = annotate_with_clock(frame, detections, record)
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return
+    tmp = f"{path}.tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(buf.tobytes())
+    os.replace(tmp, path)
+
+
+def build_config(args) -> PipelineConfig:
+    """The live pipeline config, shared with the app via vision.runtime."""
+    return live_config(
+        {
+            "model": args.model,
+            "device": args.device,
+            "imgsz": args.imgsz,
+            "stride": args.stride,
+            "conf": args.conf,
+        },
+        output_path=args.stats,
+    )
+
+
+def write_status(path: str, payload: dict) -> None:
+    """Atomically publish runner health for the app's status chips.
+
+    The app polls this once a second. It stays tiny on purpose — re-reading the
+    multi-megabyte match_stats.json at that rate would be wasteful.
+    """
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({**payload, "updated": time.time()}, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def checkpoint(analyzer: MatchAnalyzer, args) -> int:
+    """Assemble + save the current stats and bridge passes into the dashboard.
+
+    Returns the number of vision pass events written. Does NOT release the
+    capture, so the live loop keeps running after a checkpoint.
+    """
+    stats = MatchStats(
+        frame_rate_sampled=analyzer.config.sampled_fps_label(
+            getattr(analyzer, "_source_fps", 30.0)
+        ),
+        frames=getattr(analyzer, "_frames", []),
+        passes=analyzer.engine.events,
+        possession=analyzer.engine.possession_summary(),
+        coordinate_space="pitch" if analyzer.homography is not None else "image",
+    )
+    stats.save(args.stats)
+
+    if not args.no_dashboard:
+        events = vbridge.convert(stats.to_dict())
+        vbridge.write_events(events, args.data_file, fresh=False, replace_vision=True)
+        return len(events)
+    return 0
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(prog="live_vision")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--video", help="YouTube/stream URL or file path.")
+    src.add_argument("--camera", type=int,
+                     help="Local camera index (a digit string given to --video "
+                          "would be read as a file path, so use this instead).")
+    p.add_argument("--model", default="soccer_yolov8m_v1.pt", help="YOLO weights.")
+    p.add_argument("--device", default="mps", help="'mps', 'cpu', '0', 'cuda'.")
+    p.add_argument("--stride", type=int, default=6, help="Process 1 of every N frames.")
+    p.add_argument("--imgsz", type=int, default=960, help="Inference image size.")
+    p.add_argument("--conf", type=float, default=0.25, help="Detection confidence.")
+    p.add_argument("--stats", default="match_stats.json", help="Vision stats output.")
+    p.add_argument("--data-file", default="match_data.json", help="Dashboard events.")
+    p.add_argument("--interval", type=float, default=10.0,
+                   help="Seconds between checkpoints.")
+    p.add_argument("--snapshot", default="recordings/live_eye.jpg",
+                   help="Write the latest annotated frame here each step "
+                        "(set to '' to disable). The Live Eye page displays it.")
+    p.add_argument("--no-dashboard", action="store_true",
+                   help="Only write match_stats.json (skip dashboard bridging).")
+    p.add_argument("--pid-file", default=".live_vision.pid",
+                   help="PID file written on start, removed on exit.")
+    p.add_argument("--pause-flag", default=".live_eye_paused",
+                   help="While this file exists, the runner pauses capture "
+                        "(e.g. at half-time) without losing accumulated stats.")
+    p.add_argument("--status-file", default="live_eye_status.json",
+                   help="Small JSON health file the app polls for live chips.")
+    args = p.parse_args(argv)
+
+    # A camera index must stay an int all the way down: resolve_video_source
+    # treats the string "0" as a file path.
+    source = args.camera if args.camera is not None else args.video
+
+    os.chdir(_REPO_ROOT)
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+
+    pid_path = Path(args.pid_file)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    cfg = build_config(args)
+    analyzer = MatchAnalyzer(cfg)
+    print(f"[live] opening {source}", flush=True)
+    analyzer.open(source)
+    print(f"[live] source {analyzer._frame_w}x{analyzer._frame_h} "
+          f"@ {analyzer._source_fps:.0f}fps; model={args.model} device={args.device}",
+          flush=True)
+
+    from vision.sources import resolve_video_source
+
+    def _release_capture():
+        cap = getattr(analyzer, "_cap", None)
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+        analyzer._cap = None
+
+    def _reopen_capture():
+        # Re-open from the live edge, preserving engine/identities/_frames so
+        # the second half continues the same match document.
+        fresh = resolve_video_source(source)
+        analyzer._resolved_source = fresh
+        analyzer._cap = analyzer._open_capture(fresh)
+
+    processed = 0
+    ball_seen = 0
+    started = time.time()
+    last_ckpt = started
+    last_status = 0.0        # status is published far more often than checkpoints
+    frames_at_baseline = 0   # frame count when the fps window last reset
+    paused = False
+    was_paused = False
+
+    def publish_status(now, record=None):
+        """Publish runner health. Cheap enough to call every second.
+
+        Deliberately decoupled from checkpointing: a checkpoint rewrites the
+        multi-megabyte stats document every 10s, but the app's chips need to go
+        live the moment capture starts, not 10s later.
+        """
+        elapsed = max(1e-6, now - started)
+        poss = analyzer.engine.possession_summary()
+        write_status(args.status_file, {
+            "paused": False,
+            "frames": processed,
+            "fps": (processed - frames_at_baseline) / elapsed,
+            "ball_rate": (ball_seen / processed) if processed else 0.0,
+            "passes": len(analyzer.engine.events),
+            "possession_home": poss.team_home_percentage,
+            "possession_away": poss.team_away_percentage,
+            "match_time": record.timestamp if record is not None else "",
+            "reconnects": getattr(analyzer, "reconnect_count", 0),
+        })
+
+    # Publish once before the first frame so the app flips to "running" as soon
+    # as the capture is open, rather than sitting on "starting".
+    publish_status(started)
+
+    try:
+        while not _STOP:
+            # Pause gate: while the flag file exists, stop consuming frames but
+            # keep the process (and all accumulated stats) alive.
+            if os.path.exists(args.pause_flag):
+                if not paused:
+                    paused = True
+                    _release_capture()
+                    checkpoint(analyzer, args)
+                    print("[live] paused (half-time) — capture released, "
+                          "stats preserved.", flush=True)
+                # Keep publishing status so the app shows "paused", not "stale".
+                write_status(args.status_file,
+                             {"paused": True, "frames": processed})
+                time.sleep(1.0)
+                continue
+            if paused:
+                paused = False
+                was_paused = True
+                _reopen_capture()
+                print("[live] resumed — re-opened from the live edge.", flush=True)
+
+            out = analyzer.step()
+            if out is None:
+                print("[live] stream ended (or reconnect budget exhausted).",
+                      flush=True)
+                break
+            _, _frame, _dets, record = out
+            processed += 1
+            # The ball carries coordinates only on frames where it was actually
+            # detected; status alone is inferred and persists across misses.
+            if record.ball.x is not None:
+                ball_seen += 1
+            if args.snapshot:
+                try:
+                    write_snapshot(args.snapshot, _frame, _dets, record)
+                except Exception as exc:  # never let the viewer kill the run
+                    print(f"[live] snapshot failed: {exc}", flush=True)
+            now = time.time()
+            # Reset the fps baseline after a pause so half-time idling does not
+            # drag the reported rate down for the rest of the match.
+            if was_paused:
+                started, frames_at_baseline = now, processed
+                was_paused = False
+            if now - last_status >= 1.0:
+                publish_status(now, record)
+                last_status = now
+            if now - last_ckpt >= args.interval:
+                n = checkpoint(analyzer, args)
+                poss = analyzer.engine.possession_summary()
+                print(f"[live] {record.timestamp}  frames={processed}  "
+                      f"passes={len(analyzer.engine.events)}  bridged={n}  "
+                      f"poss H{poss.team_home_percentage:.0f}/"
+                      f"A{poss.team_away_percentage:.0f}", flush=True)
+                last_ckpt = now
+    finally:
+        n = checkpoint(analyzer, args)
+        try:
+            analyzer.close()
+        except Exception:
+            pass
+        if pid_path.exists():
+            pid_path.unlink()
+        # Drop the health file so a later run can't read this match's numbers.
+        try:
+            os.remove(args.status_file)
+        except OSError:
+            pass
+        print(f"[live] stopped. final: frames={processed} "
+              f"passes={len(analyzer.engine.events)} bridged={n} "
+              f"-> {args.stats}, {args.data_file}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

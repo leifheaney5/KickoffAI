@@ -62,7 +62,7 @@ def team_standings(matches: list) -> list:
     return rows
 
 
-def top_scorers(goal_rows: list, limit: int = 15) -> list:
+def top_scorers(goal_rows: list) -> list:
     """Tally goals per (player, team) from goal events.
 
     `goal_rows`: dicts with player + team (the real team name). Unnamed players
@@ -75,4 +75,4 @@ def top_scorers(goal_rows: list, limit: int = 15) -> list:
             continue
         counts[(player, (g.get("team") or "").strip())] += 1
     return [{"player": p, "team": t, "goals": n}
-            for (p, t), n in counts.most_common(limit)]
+            for (p, t), n in counts.most_common()]

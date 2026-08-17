@@ -66,6 +66,16 @@ def atomic_replace(tmp: str, dst: str, attempts: int = 40,
                 raise
             time.sleep(delay)
 
+# Ingest modes, in the order the UI offers them. Vision leads: the Eye is the
+# primary ingest and voice is the backup you reach for when there's no camera.
+INGEST_MODES = ("vision", "both", "voice")
+
+INGEST_LABELS = {
+    "vision": "Vision only",
+    "both": "Vision + voice notes",
+    "voice": "Voice only (no camera)",
+}
+
 DEFAULT = {
     "paused": False,
     "match_name": "",
@@ -84,6 +94,24 @@ DEFAULT = {
         "away": {"name": "", "lineup": ""},
     },
     "thoughts_mode": False,
+    # Which ingest path drives the match. Vision (the Eye) is the primary path;
+    # voice (the Ear) is the backup lane you switch on when there's no camera.
+    #   "vision" | "both" | "voice"
+    "ingest_mode": "vision",
+    # The camera feed the Eye analyses. Persisted here so the Camera & Feed page,
+    # the match console and scripts/live_vision.py all read one source of truth
+    # instead of passing a URL around by hand.
+    "feed": {
+        "kind": "stream",      # "stream" | "webcam" | "file"
+        "url": "",             # Veo HLS .m3u8 (preferred) or a YouTube fallback
+        "camera_index": 0,
+        "file_path": "",
+        "model": "soccer_yolov8m_v1.pt",
+        "device": "auto",      # "auto" resolves to mps/cuda/cpu at launch
+        "stride": 6,
+        "imgsz": 960,
+        "conf": 0.25,
+    },
     "noise_gate": 30,
     "audio_chunking": {
         "phrase_time_limit": 10.0,
@@ -129,6 +157,13 @@ def load_control() -> dict:
         **DEFAULT["calibration_test"],
         **(saved_calibration if isinstance(saved_calibration, dict) else {}),
     }
+    saved_feed = merged.get("feed")
+    merged["feed"] = {
+        **DEFAULT["feed"],
+        **(saved_feed if isinstance(saved_feed, dict) else {}),
+    }
+    if merged.get("ingest_mode") not in INGEST_MODES:
+        merged["ingest_mode"] = DEFAULT["ingest_mode"]
     merged["lineups"] = _normalise_lineups(merged.get("lineups"))
     return merged
 
@@ -145,6 +180,56 @@ def save_control(state: dict) -> None:
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+
+
+# --------------------------------------------------------------------------- #
+# Ingest mode + camera feed
+# --------------------------------------------------------------------------- #
+def uses_vision(state: dict) -> bool:
+    """True when the Eye should run for this match."""
+    return state.get("ingest_mode", DEFAULT["ingest_mode"]) in ("vision", "both")
+
+
+def uses_voice(state: dict) -> bool:
+    """True when the audio tracker (the Ear) should run for this match."""
+    return state.get("ingest_mode", DEFAULT["ingest_mode"]) in ("voice", "both")
+
+
+def feed_source(state: dict):
+    """The configured feed as the pipeline wants it.
+
+    Returns a stream/file path string, or an int camera index for a webcam —
+    exactly what ``vision.sources.resolve_video_source`` and OpenCV accept.
+    Returns None when nothing usable is configured yet.
+    """
+    feed = state.get("feed") or DEFAULT["feed"]
+    kind = feed.get("kind", "stream")
+    if kind == "webcam":
+        try:
+            return int(feed.get("camera_index", 0))
+        except (TypeError, ValueError):
+            return 0
+    value = (feed.get("file_path") if kind == "file" else feed.get("url")) or ""
+    return value.strip() or None
+
+
+def feed_label(state: dict) -> str:
+    """A short human description of the configured feed, for status lines."""
+    feed = state.get("feed") or DEFAULT["feed"]
+    kind = feed.get("kind", "stream")
+    src = feed_source(state)
+    if src is None:
+        return "no feed configured"
+    if kind == "webcam":
+        return f"camera #{src}"
+    if kind == "file":
+        return os.path.basename(str(src))
+    return "live stream"
+
+
+def feed_ready(state: dict) -> bool:
+    """True when the feed has enough configured for the Eye to start."""
+    return feed_source(state) is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -372,6 +457,44 @@ def append_note(note: dict, path: str = None) -> None:
     notes = load_notes(path)
     notes.append(note)
     _write_json_atomic(notes, path)
+
+
+def note_source(note: dict) -> str:
+    """Where a note came from: "written" or "voice".
+
+    Notes written before this field existed all came from the mic, so the
+    absence of the key means voice.
+    """
+    src = (note or {}).get("source")
+    return src if src in ("written", "voice") else "voice"
+
+
+def add_written_note(text: str, state: dict = None, path: str = None) -> dict:
+    """Save a typed match note, stamped with the current match clock.
+
+    Shares notes.json (and therefore the report and library archive) with the
+    spoken "record thoughts" notes, so a written note is a first-class note, not
+    a second kind of thing.
+
+    Returns the saved note; raises ValueError on empty text.
+    """
+    from datetime import datetime, timezone
+
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("A note needs some text.")
+
+    state = load_control() if state is None else state
+    main_clk, added, _half = clock_label(state["timer"])
+    note = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "match_time": f"{main_clk}{(' ' + added) if added else ''}",
+        "text": text,
+        "audio": None,
+        "source": "written",
+    }
+    append_note(note, path)
+    return note
 
 
 def delete_note(timestamp: str, path: str = None) -> bool:

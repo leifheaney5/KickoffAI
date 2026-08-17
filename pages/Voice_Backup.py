@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Audio & Mic — tune what the tracker hears.
+Voice Backup — tune what the tracker hears.
+
+Vision is the primary ingest; this page is the backup lane. Reach for it when
+there is no camera to point at, when a feed drops mid-match, or to narrate the
+calls the Eye cannot make — fouls, cards, substitutions, your own read of the
+game.
 
 Background block-out (live mic sensitivity), audio chunking, a mic calibration
 test, screen + mic capture, and the voice phrasing guide. These are the dials
@@ -17,9 +22,20 @@ import screen_recorder
 import ui_helpers as UI
 
 st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("SET UP", "Audio & Mic"), unsafe_allow_html=True)
+st.markdown(brand.page_header("SET UP", "Voice Backup"), unsafe_allow_html=True)
 
 state = control.load_control()
+
+# Say plainly whether any of this is live for the current match — these dials do
+# nothing at all in vision-only mode, and silently ineffective controls are the
+# most confusing kind.
+if not control.uses_voice(state):
+    st.info("Voice is off for this match, so nothing here is active. Switch the "
+            "ingest mode to **Vision + voice notes** or **Voice only** on "
+            "Camera & Feed to use the mic.")
+else:
+    st.caption(f"Active · ingest mode is "
+               f"**{control.INGEST_LABELS[state['ingest_mode']]}**.")
 
 # ---- Background block-out (live mic sensitivity) -------------------------- #
 st.markdown(brand.section("Background block-out"), unsafe_allow_html=True)

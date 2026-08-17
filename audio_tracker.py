@@ -53,6 +53,10 @@ DEDUPE_SEC = float(os.environ.get("KICKOFF_DEDUPE_SEC", "6"))
 # falls behind, the oldest clip is dropped rather than letting capture block.
 AUDIO_QUEUE_MAX = int(os.environ.get("KICKOFF_AUDIO_QUEUE_MAX", "8"))
 
+# Prune saved review audio every N processed clips so the dir can't grow without
+# bound over a long match (0 disables the periodic sweep).
+REVIEW_AUDIO_PRUNE_EVERY = int(os.environ.get("KICKOFF_REVIEW_PRUNE_EVERY", "40"))
+
 # Whisper model size. "medium.en" favors accurate short soccer commands over
 # minimum latency. Override WHISPER_MODEL / WHISPER_MLX_MODEL for speed tests.
 WHISPER_OPENAI_MODEL = os.environ.get("WHISPER_MODEL", "medium.en")
@@ -548,6 +552,21 @@ def merge_events(primary: dict, fallback: dict) -> dict:
         if not merged.get(key) and fallback.get(key):
             merged[key] = fallback[key]
     return merged
+
+
+def is_duplicate_event(event: dict, last_sig, now: float, last_time: float,
+                       window: float):
+    """Decide whether ``event`` repeats the last logged one within ``window``.
+
+    Returns ``(is_duplicate, signature)`` where the signature is
+    ``(action, team, player)``. Only events that actually carry an action are
+    ever treated as duplicates, so blank/parse-failed phrases never suppress.
+    """
+    sig = ((event or {}).get("action"), (event or {}).get("team"),
+           (event or {}).get("player"))
+    is_dup = bool(window > 0 and sig[0] and sig == last_sig
+                  and (now - last_time) < window)
+    return is_dup, sig
 
 
 def resolve_event(event: dict, lineups=None) -> dict:
@@ -1048,6 +1067,7 @@ def main():
     def process_loop():
         last_event_sig = None  # (action, team, player) of the last logged event
         last_event_sig_time = 0.0
+        processed = 0  # clips handled; drives periodic review-audio pruning
         # Keep draining whatever is queued even after a stop is requested.
         while running["flag"] or not audio_q.empty():
             try:
@@ -1055,6 +1075,18 @@ def main():
             except queue.Empty:
                 continue
             status["queued"] = audio_q.qsize()
+
+            # Periodically cap the review-audio dir so it can't fill the disk.
+            processed += 1
+            if (REVIEW_AUDIO_PRUNE_EVERY > 0
+                    and processed % REVIEW_AUDIO_PRUNE_EVERY == 0):
+                try:
+                    pruned = audio_ingest.prune_review_audio()
+                    if pruned:
+                        print(f"[review] pruned {pruned} old audio clips",
+                              flush=True)
+                except Exception as exc:
+                    print(f"[review] prune failed: {exc}", flush=True)
 
             # Transcribe straight from memory (no temp WAV round-trip).
             started = time.perf_counter()
@@ -1164,6 +1196,7 @@ def main():
                     "match_time": match_time,
                     "text": text,
                     "audio": audio_rel,
+                    "source": "voice",
                 }
                 control.append_note(note)
                 status["last_heard"] = text[:140]
@@ -1185,11 +1218,10 @@ def main():
             # Drop an identical event repeated within the cooldown (e.g. "goal,
             # goal!" or two windows hearing the same call). Only de-dupe events
             # that actually carry an action, and keep the suppression reviewable.
-            sig = ((event or {}).get("action"), (event or {}).get("team"),
-                   (event or {}).get("player"))
             now_mono = time.monotonic()
-            if (DEDUPE_SEC > 0 and sig[0] and sig == last_event_sig
-                    and now_mono - last_event_sig_time < DEDUPE_SEC):
+            is_dup, sig = is_duplicate_event(
+                event, last_event_sig, now_mono, last_event_sig_time, DEDUPE_SEC)
+            if is_dup:
                 print(f"[ear] ignored (duplicate): {text[:60]!r}", flush=True)
                 write_review(
                     timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1259,6 +1291,10 @@ def main():
     status["recording"] = False
     status["rec_since"] = None
     publish_status()
+    try:
+        audio_ingest.prune_review_audio()  # tidy up on the way out
+    except Exception:
+        pass
     print("[ear] stopped cleanly.", flush=True)
 
 

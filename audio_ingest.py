@@ -18,9 +18,14 @@ from datetime import datetime, timezone
 import control
 
 AUDIO_REVIEWS_FILE = os.environ.get(
-    "KICKOFF_AUDIO_REVIEWS_FILE", "audio_reviews.json")
+    "KICKOFF_AUDIO_REVIEWS_FILE", "audio_reviews.jsonl")
 REVIEW_AUDIO_DIR = os.environ.get("KICKOFF_REVIEW_AUDIO_DIR", "review_audio")
 CORRECTIONS_FILE = os.environ.get("KICKOFF_CORRECTIONS_FILE", "corrections.json")
+
+# Cap on saved review-audio clips. The dir grows by one WAV per logged/ignored
+# phrase, so an unbounded match fills the disk; pruning keeps the newest plus any
+# clip still attached to an un-reviewed ("pending") event. 0 disables pruning.
+REVIEW_AUDIO_MAX = int(os.environ.get("KICKOFF_REVIEW_AUDIO_MAX", "600"))
 
 
 def _now_iso() -> str:
@@ -57,14 +62,82 @@ def _write_list(path: str, data: list) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Review records
+# Review records (append-only JSON Lines)
 # --------------------------------------------------------------------------- #
+# Each logged or updated record is one appended line, so the hot transcription
+# loop never rewrites the whole file. The old JSON-array store cost O(n) per
+# append and O(n^2) over a match (a review is written for every event AND every
+# ignored blip). Readers collapse lines by id, last write winning, so an update
+# is just another appended (partial) line.
+def _reviews_path(path: str = None) -> str:
+    return path or AUDIO_REVIEWS_FILE
+
+
+def _append_review_line(path: str, record: dict) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+def _rewrite_reviews(path: str, reviews: list) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for rec in reviews:
+                fh.write(json.dumps(rec) + "\n")
+        control.atomic_replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def _migrate_legacy_reviews(path: str) -> None:
+    """One-time fold of a legacy JSON-array file into the JSONL store."""
+    if os.path.exists(path) or not path.endswith(".jsonl"):
+        return
+    legacy = path[:-1]  # "audio_reviews.jsonl" -> "audio_reviews.json"
+    if os.path.exists(legacy):
+        data = _read_list(legacy)
+        if data:
+            _rewrite_reviews(path, data)
+
+
 def load_reviews(path: str = None) -> list:
-    return _read_list(path or AUDIO_REVIEWS_FILE)
+    path = _reviews_path(path)
+    _migrate_legacy_reviews(path)
+    if not os.path.exists(path):
+        return []
+    merged: dict = {}
+    order: list = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue  # skip a torn/partial line rather than fail
+                if not isinstance(rec, dict):
+                    continue
+                rid = rec.get("id") or f"_anon_{len(order)}"
+                if rid in merged:
+                    merged[rid].update(rec)  # later line patches the earlier one
+                else:
+                    merged[rid] = rec
+                    order.append(rid)
+    except OSError:
+        return []
+    return [merged[r] for r in order]
 
 
 def save_reviews(reviews: list, path: str = None) -> None:
-    _write_list(path or AUDIO_REVIEWS_FILE, reviews)
+    """Compact the store to one line per record (migration / maintenance)."""
+    _rewrite_reviews(_reviews_path(path), reviews)
 
 
 def review_for_event(event_timestamp: str, path: str = None) -> dict | None:
@@ -77,20 +150,18 @@ def review_for_event(event_timestamp: str, path: str = None) -> dict | None:
 
 
 def append_review(record: dict, path: str = None) -> dict:
-    reviews = load_reviews(path)
-    reviews.append(record)
-    save_reviews(reviews, path)
+    path = _reviews_path(path)
+    _migrate_legacy_reviews(path)
+    _append_review_line(path, record)
     return record
 
 
 def update_review(review_id: str, updates: dict, path: str = None) -> bool:
     if not review_id:
         return False
-    reviews = load_reviews(path)
-    for review in reviews:
+    for review in load_reviews(path):
         if review.get("id") == review_id:
-            review.update(updates)
-            save_reviews(reviews, path)
+            _append_review_line(_reviews_path(path), {"id": review_id, **updates})
             return True
     return False
 
@@ -99,11 +170,11 @@ def update_review_for_event(event_timestamp: str, updates: dict,
                             path: str = None) -> bool:
     if not event_timestamp:
         return False
-    reviews = load_reviews(path)
-    for review in reversed(reviews):
+    for review in reversed(load_reviews(path)):
         if review.get("event_timestamp") == event_timestamp:
-            review.update(updates)
-            save_reviews(reviews, path)
+            patch = {"id": review.get("id"),
+                     "event_timestamp": event_timestamp, **updates}
+            _append_review_line(_reviews_path(path), patch)
             return True
     return False
 
@@ -156,6 +227,48 @@ def save_review_audio(audio, write_wav, timestamp: str = None) -> str | None:
     path = os.path.join(REVIEW_AUDIO_DIR, f"review_{stamp}.wav")
     write_wav(audio, path)
     return path
+
+
+def prune_review_audio(max_clips: int = None, keep_statuses=("pending",),
+                       reviews_path: str = None) -> int:
+    """Cap the review-audio directory, deleting the oldest clips first.
+
+    Clips attached to a review whose status is in ``keep_statuses`` (by default
+    the still-unreviewed "pending" events) are protected, so the noisy
+    "ignored"/"calibration" clips are pruned first. Returns the count removed.
+    """
+    max_clips = REVIEW_AUDIO_MAX if max_clips is None else max_clips
+    if max_clips <= 0 or not os.path.isdir(REVIEW_AUDIO_DIR):
+        return 0
+
+    protected = set()
+    for review in load_reviews(reviews_path):
+        if review.get("status") in keep_statuses and review.get("audio"):
+            protected.add(os.path.abspath(review["audio"]))
+
+    clips = []
+    for name in os.listdir(REVIEW_AUDIO_DIR):
+        if not name.endswith(".wav"):
+            continue
+        full = os.path.join(REVIEW_AUDIO_DIR, name)
+        if os.path.abspath(full) in protected:
+            continue
+        try:
+            clips.append((os.path.getmtime(full), full))
+        except OSError:
+            continue
+    clips.sort()  # oldest first
+
+    # Protected clips count toward the budget so the total stays under the cap.
+    over = len(clips) - max(max_clips - len(protected), 0)
+    removed = 0
+    for _mtime, full in clips[:max(over, 0)]:
+        try:
+            os.remove(full)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 # --------------------------------------------------------------------------- #

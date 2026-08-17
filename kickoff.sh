@@ -17,9 +17,11 @@ DATA_FILE="${KICKOFF_DATA_FILE:-match_data.json}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2}"
 EMBED_MODEL="${KICKOFF_EMBED_MODEL:-nomic-embed-text}"
+KICKOFF_UI="${KICKOFF_UI:-desktop}"
 
-# Match library DB: use the Docker Postgres if it's reachable on :5432,
-# otherwise leave KICKOFF_DB_URL unset so db.py falls back to local SQLite.
+# Match library DB: live launches should use Postgres. SQLite is still useful
+# for development, but it must be explicit so match-day data cannot split across
+# backends by accident.
 if [ -z "${KICKOFF_DB_URL:-}" ] && (: < /dev/tcp/localhost/5432) 2>/dev/null; then
   export KICKOFF_DB_URL="postgresql+psycopg://kickoff:kickoff@localhost:5432/kickoff"
 fi
@@ -88,13 +90,64 @@ fi
 # --------------------------------------------------------------------------- #
 if [ -n "${KICKOFF_DB_URL:-}" ]; then
   green "✓ Match library using Postgres (docker compose up -d)"
+elif [ "${KICKOFF_ALLOW_SQLITE:-0}" = "1" ]; then
+  yellow "• Match library using local SQLite (explicit KICKOFF_ALLOW_SQLITE=1)"
 else
-  yellow "• Match library using local SQLite (start Postgres with 'docker compose up -d')"
+  red "✗ Match library Postgres is not reachable on localhost:5432."
+  red "  Start it with: docker compose up -d"
+  yellow "  For dev-only SQLite, run: KICKOFF_ALLOW_SQLITE=1 ./kickoff.sh"
+  exit 1
+fi
+
+# --------------------------------------------------------------------------- #
+# 2c. Ingest mode — vision is the primary path; voice is the backup lane.
+#
+# The mic tracker is a real cost (a always-on microphone, CPU, and a model
+# round-trip per phrase), so it only starts when this match actually uses it.
+# Set it on the Camera & Feed page, or override here with KICKOFF_INGEST.
+# --------------------------------------------------------------------------- #
+INGEST_MODE="${KICKOFF_INGEST:-$(python - <<'PY' 2>/dev/null || echo vision
+import control
+print(control.load_control().get("ingest_mode", "vision"))
+PY
+)}"
+
+case "$INGEST_MODE" in
+  vision) green "✓ Ingest: vision only (the Eye)" ;;
+  both)   green "✓ Ingest: vision + voice notes" ;;
+  voice)  yellow "• Ingest: voice only — the Eye is off for this match" ;;
+  *)      yellow "• Unknown ingest mode '$INGEST_MODE'; using vision"
+          INGEST_MODE="vision" ;;
+esac
+
+if [ "$INGEST_MODE" = "vision" ] || [ "$INGEST_MODE" = "both" ]; then
+  if [ ! -f "soccer_yolov8m_v1.pt" ] && [ ! -f "yolov8m.pt" ]; then
+    yellow "⚠ No YOLO weights found in the repo. The Eye will try to download"
+    yellow "  stock weights on first start; soccer-trained weights work better."
+  fi
+  if ! python -c "import cv2" >/dev/null 2>&1; then
+    red "✗ Vision dependencies are missing — the Eye cannot start."
+    yellow "  Install them with: pip install -r vision/requirements.txt"
+  fi
 fi
 
 # --------------------------------------------------------------------------- #
 # 3. Clean-exit trap
 # --------------------------------------------------------------------------- #
+if [ "$KICKOFF_UI" != "browser" ]; then
+  green "Launching the native desktop app..."
+  echo "----------------------------------------------------------------"
+  if [ "$INGEST_MODE" = "voice" ]; then
+    yellow "  Speak your play-by-play into the mic."
+  else
+    yellow "  Open Match Console and press Start to run the Eye on your feed."
+  fi
+  yellow "  Close the app window or press Ctrl+C here to stop everything."
+  echo "----------------------------------------------------------------"
+  KICKOFF_INGEST="$INGEST_MODE" KICKOFF_DATA_FILE="$DATA_FILE" python desktop.py
+  exit $?
+fi
+
 AUDIO_PID=""
 STREAMLIT_PID=""
 
@@ -103,6 +156,10 @@ cleanup() {
   yellow "Shutting down Kickoff Pulse..."
   [ -n "$STREAMLIT_PID" ] && kill "$STREAMLIT_PID" 2>/dev/null || true
   [ -n "$AUDIO_PID" ] && kill "$AUDIO_PID" 2>/dev/null || true
+  # The Eye is a detached process so it survives page navigation; shutting the
+  # whole app down is the one time we do want it to stop. It checkpoints on the
+  # way out, so accumulated possession/passing is preserved.
+  python -c "import vision_runner; vision_runner.stop()" >/dev/null 2>&1 || true
   # Give them a moment, then force if needed.
   sleep 1
   [ -n "$AUDIO_PID" ] && kill -9 "$AUDIO_PID" 2>/dev/null || true
@@ -112,27 +169,36 @@ cleanup() {
 trap cleanup INT TERM
 
 # --------------------------------------------------------------------------- #
-# 4. Start the audio tracker (background)
+# 4. Start the audio tracker (background) — only when this match uses voice
 # --------------------------------------------------------------------------- #
-green "Starting the audio tracker (The Ear + The Brain)..."
-KICKOFF_DATA_FILE="$DATA_FILE" python audio_tracker.py &
-AUDIO_PID=$!
-sleep 1
+if [ "$INGEST_MODE" = "vision" ]; then
+  green "• Audio tracker not started (vision-only match)."
+  yellow "  Need it? Switch ingest mode on Camera & Feed, or: KICKOFF_INGEST=both ./kickoff.sh"
+else
+  green "Starting the audio tracker (The Ear + The Brain)..."
+  KICKOFF_DATA_FILE="$DATA_FILE" python audio_tracker.py &
+  AUDIO_PID=$!
+  sleep 1
 
-if ! kill -0 "$AUDIO_PID" 2>/dev/null; then
-  red "Audio tracker failed to start. Check the output above."
-  red "Tip: grant microphone permission to your terminal in"
-  red "System Settings > Privacy & Security > Microphone."
-  exit 1
+  if ! kill -0 "$AUDIO_PID" 2>/dev/null; then
+    red "Audio tracker failed to start. Check the output above."
+    red "Tip: grant microphone permission to your terminal in"
+    red "System Settings > Privacy & Security > Microphone."
+    exit 1
+  fi
+  green "✓ Audio tracker running (PID $AUDIO_PID)"
 fi
-green "✓ Audio tracker running (PID $AUDIO_PID)"
 
 # --------------------------------------------------------------------------- #
-# 5. Launch the dashboard (opens the browser)
+# 5. Launch the dashboard in browser mode
 # --------------------------------------------------------------------------- #
-green "Launching the dashboard in your browser..."
+green "Launching the dashboard in browser mode..."
 echo "----------------------------------------------------------------"
-yellow "  Speak your play-by-play into the mic."
+if [ "$INGEST_MODE" = "voice" ]; then
+  yellow "  Speak your play-by-play into the mic."
+else
+  yellow "  Open Match Console and press Start to run the Eye on your feed."
+fi
 yellow "  Press Ctrl+C here to stop everything."
 echo "----------------------------------------------------------------"
 

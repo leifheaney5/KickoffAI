@@ -39,13 +39,40 @@ A capture wedged in uninterruptible device I/O (e.g. it failed to open the scree
 device) may ignore even SIGKILL — it clears on logout/reboot. Never SIGKILL a
 healthy recording (corrupts the file).
 
-## 3. Stale flags + other jobs
+## 3. The Eye (vision runner)
 
-- `live_vision`: `.live_vision.pid` and `.live_eye_paused` — if the PID is dead,
-  remove them. `live_vision.py` at high CPU is expected during CV inference.
+`vision_runner.json` is the app's view of the Eye; `.live_vision.pid` is the
+runner's own. Reconcile them the same way as `recorder.json`:
+
+```bash
+.venv/bin/python -c "import vision_runner, json; print(json.dumps(vision_runner.status(), indent=2))"
+.venv/bin/python -c "import vision_runner; print(vision_runner.reconcile())"   # clears state pointing at a dead PID
+```
+
+Read `health` rather than guessing:
+
+- `ok` — checkpointing normally. High CPU here is expected during inference.
+- `starting` — spawned but no frame yet (model load can take ~30-90s on first run).
+- `stale` — alive but no checkpoint in 30s: the feed has probably stalled. Check
+  `recordings/live_vision.log` and the snapshot age.
+- `down` — not running.
+
+Stop it **through the supervisor**, never with a bare `kill -9`: it returns as
+soon as the final checkpoint lands, so the match stats are preserved.
+
+```bash
+.venv/bin/python -c "import vision_runner; print(vision_runner.stop())"
+```
+
+`checkpoint_saved: false` in the result means the stats may be up to one
+checkpoint interval (10s) old. Stale `.live_vision.pid` / `.live_eye_paused`
+files whose PID is dead can simply be removed.
+
+## 4. Stale flags + disk
+
 - Disk: `df -h .` — `recordings/` and `exports/` grow fast.
 
-## 4. Streamlit greyed out but server alive
+## 5. Streamlit greyed out but server alive
 
 If `curl http://127.0.0.1:8501/healthz` returns 200 but the window is grey, the
 **client socket is stale, not the server**. Open a fresh browser tab

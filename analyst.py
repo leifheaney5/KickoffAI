@@ -26,11 +26,11 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 SYSTEM_PROMPT = (
-    "You are Kickoff Pulse's season analyst. You are given context for several "
-    "matches retrieved from the user's match library. Answer the question using "
+    "You are a sports data analyst for Kickoff Pulse, a soccer match analysis platform. You are given context for several "
+    "matches retrieved from the user's match library. Answer questions using "
     "ONLY that context — compare across the matches when useful, cite specific "
     "scores, stats, and events, and stay neutral and concise. If the context "
-    "doesn't contain the answer, say so plainly rather than guessing."
+    "doesn't contain the answer, say so plainly rather than guessing. Always be truthful and do not generate information that is not present in the context. Never make up information."
 )
 
 QUICK_PROMPTS = {
@@ -38,6 +38,11 @@ QUICK_PROMPTS = {
     "Best performance": "Which match was the strongest performance, and why?",
     "Recurring issues": "What problems or patterns recur across these matches?",
     "Top contributors": "Which players stand out across these matches?",
+    "Tactical analysis": "What tactical trends or strategies are evident across these matches?",
+    "Player performance": "How have individual players performed across these matches?",
+    "Match insights": "What are the key takeaways from these matches?",
+    "And more": "Provide any additional insights or observations that can be drawn from these matches.",
+    "Final thoughts": "What are your final thoughts on these matches?"
 }
 
 

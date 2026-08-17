@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: kickoff
       POSTGRES_DB: kickoff
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - kickoff_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -60,7 +60,8 @@ services:
       POSTGRES_DB: kickoff
       POSTGRES_USER: kickoff
       POSTGRES_PASSWORD: kickoff
-      SCHEDULE: "@daily"
+      SCHEDULE: "0 3 * * *"
+      BACKUP_ON_START: "TRUE"
       BACKUP_KEEP_DAYS: "14"
       BACKUP_KEEP_WEEKS: "4"
       BACKUP_KEEP_MONTHS: "6"

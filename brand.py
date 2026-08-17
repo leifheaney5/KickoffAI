@@ -295,6 +295,9 @@ _CSS_BODY = """
   .dot { width:9px; height:9px; border-radius:50%; display:inline-block; flex:none; }
   .dot.rec { background:var(--c-live); animation:recpulse 1.4s infinite; }
   .dot.paused { background:#f5a623; }
+  /* Solid red, deliberately not pulsing: something is wrong and static reads
+     as "stuck" where the pulsing rec dot reads as "alive". */
+  .dot.warn { background:var(--c-live); }
   .dot.off { background:transparent; border:2px solid #5b6e92; }
   @keyframes recpulse { 0%{box-shadow:0 0 0 0 rgba(255,61,110,.6);} 70%{box-shadow:0 0 0 10px rgba(255,61,110,0);} 100%{box-shadow:0 0 0 0 rgba(255,61,110,0);} }
 

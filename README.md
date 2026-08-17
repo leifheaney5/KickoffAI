@@ -6,26 +6,29 @@
 
 **Kickoff Pulse** is an AI-powered soccer intelligence platform — the pulse of
 the match. A fully-local, real-time soccer stats tracker (Apple Silicon Macs and
-Windows). Narrate a match into your mic and watch a live dashboard fill up with
+Windows). Point it at your camera feed and watch a live dashboard fill up with
 stats — no cloud, no API keys.
 
+It has two ways to capture a match. **Vision is the primary path**; voice is the
+backup for when there is no camera, or for the calls a camera cannot make.
+
 ```
-  Your voice
-      |
-      v
-  audio_tracker.py --- The Ear   (SpeechRecognition + mlx-whisper)
-      |  transcript
-      v
-  Ollama (llama3.2) --- The Brain (transcript -> strict JSON event)
-      |  event
-      v
-  match_data.json  --- The Database
-      |
-      v
-  dashboard.py ------- The Display (Streamlit, live match clock)
-      |
-      v
-  report.py --------- The Report  (email-friendly .txt + .pdf)
+  Camera feed (Veo HLS / webcam)        Your voice  [backup]
+      |                                     |
+      v                                     v
+  scripts/live_vision.py -- The Eye     audio_tracker.py -- The Ear
+      |  detections, possession, passes      |  transcript
+      |                                     v
+      |                                 Ollama (llama3.2) -- The Brain
+      |                                     |  event
+      v                                     v
+  match_stats.json  ------------------>  match_data.json  -- The Database
+                                            |
+                                            v
+                                        dashboard.py ----- The Display
+                                            |
+                                            v
+                                        report.py -------- The Report
 ```
 
 ## Quick start
@@ -43,8 +46,37 @@ Windows (PowerShell 7+):
 ```
 
 On first run this creates a `.venv`, installs dependencies, verifies Ollama and
-the `llama3.2` model, starts the audio tracker, and opens the dashboard in your
-browser. Press **Ctrl+C** in the terminal to stop everything cleanly.
+the `llama3.2` model, and opens the dashboard in the native desktop window. Press
+**Ctrl+C** in the terminal, or close the app window, to stop everything cleanly.
+
+For browser-tab debugging, run:
+
+```bash
+KICKOFF_UI=browser ./kickoff.sh
+```
+
+### Running a match with vision (the default)
+
+1. **Camera & Feed** — paste your Veo `.m3u8` stream URL (or pick a webcam) and
+   press **Test connection** to confirm a frame arrives.
+2. Still there, calibrate the pitch once for a fixed camera. Uncalibrated feeds
+   still work, but positions stay in image space and possession is approximate.
+3. **Match Console** — press **Start**. The clock and the Eye start together.
+   The Eye runs as its own process, so it keeps analysing wherever you navigate.
+4. At the break, press **Half** — the Eye idles and keeps every accumulated stat,
+   then re-opens from the live edge when you resume.
+
+### Using voice as well, or instead
+
+Switch **Ingest mode** on Camera & Feed:
+
+| Mode | What runs |
+|---|---|
+| Vision only *(default)* | The Eye. No microphone is opened. |
+| Vision + voice notes | The Eye, plus the mic for fouls, cards, subs and your own notes. |
+| Voice only | The mic-driven tracker, as the app worked before. No camera needed. |
+
+Override for a single launch with `KICKOFF_INGEST=both ./kickoff.sh`.
 
 ## What to say
 
@@ -67,14 +99,23 @@ share — aggregated per team **and** per player.
 
 ## Dashboard features
 
-- **Recording indicator** at the top: a glowing mic + pulsing red dot when the
-  tracker is actively listening (amber when paused, hollow when the tracker is
-  offline), plus live **recording time**, **session time**, event count, and the
-  last phrase heard.
-- **90-minute match clock** with Start / Pause / Halftime / Reset. After 45:00
-  (or 90:00 in the second half) it shows **added time** as `+M:SS`. Every logged
-  event is stamped with the match-clock reading.
-- **Pause recording** — temporarily stop logging events without stopping the app.
+- **Status chips** at the top, showing only the ingest paths this match uses.
+  For vision: the Eye's health (pulsing when analysing, amber while starting or
+  paused, red when it stops responding), **fps**, **ball-detection rate**, live
+  possession and pass count. For voice: the glowing mic, **recording time**,
+  **session time**, event count, and the last phrase heard.
+- **The Eye panel** — the latest annotated frame with Start / Pause / Stop. The
+  runner is its own process, so it keeps analysing wherever you navigate and
+  closing the page does not stop it.
+- **90-minute match clock** with Start / Pause / Halftime / Reset. Start begins
+  the clock and every configured ingest together; Halftime idles the Eye without
+  losing accumulated stats. After 45:00 (or 90:00 in the second half) it shows
+  **added time** as `+M:SS`. Every logged event is stamped with the match clock.
+- **Pause mic** — temporarily stop logging voice events without stopping the app.
+- **Match notes** — type an observation and it is stamped with the match clock,
+  listed newest-first, and carried into the post-match report and the library
+  archive. Always available, whatever the ingest mode; when voice is on you can
+  speak notes instead from a second tab. Each note is tagged written or voice.
 - **Per-player stats** table plus a **spotlight card** for any player you pick.
 - **Substitutions** list.
 - **Post-match summary** — type your own notes, or click **Draft with AI** to
@@ -117,10 +158,18 @@ A third page turns the event log into analysis:
 
 | File | Role |
 |------|------|
+| `scripts/live_vision.py` | The Eye: persistent live CV runner (detections, possession, passes) |
+| `vision_runner.py` | Supervises the Eye from the app (start/pause/stop, health) |
+| `vision/runtime.py` | Shared device selection + pipeline config for every caller |
+| `vision/render.py` | Shared drawing: annotated frames, tactical map, passing map |
 | `audio_tracker.py` | Listens, transcribes, parses via Ollama, writes events |
-| `dashboard.py`     | Streamlit real-time dashboard (clock, stats, controls) |
-| `pages/1_Match_Timeline.py` | Visual, clickable timeline page + image export |
-| `pages/2_Match_Insights.py` | Momentum graph + local AI match analyst |
+| `dashboard.py`     | App entry point + grouped navigation |
+| `pages/Camera_and_Feed.py` | Feed source, connection test, model, pitch calibration |
+| `pages/Match_Console.py` | Live hub: scoreboard, transport, the Eye, event feed |
+| `pages/Live_Eye.py` | Full-size view of the vision runner |
+| `pages/Film_Room.py` | Recorded-file analysis + tactical/passing maps |
+| `pages/Timeline.py` | Visual, clickable timeline page + image export |
+| `pages/Insights.py` | Momentum graph + local AI match analyst |
 | `insights.py`      | Momentum engine + AI analyst context builder |
 | `brand.py`         | Brand kit: palette, fonts, logo assets, design-system CSS |
 | `stats.py`         | Shared stat engine (team + player aggregation) |
@@ -156,6 +205,8 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 | `KICKOFF_REPORTS_DIR` | `reports` | Where exported reports are written |
 | `KICKOFF_RECORD_DIR` | `recordings` | Where screen recordings are saved |
 | `KICKOFF_RECORDER_FILE` | `recorder.json` | Screen recorder runtime state |
+| `KICKOFF_VISION_STATE_FILE` | `vision_runner.json` | Vision runner (the Eye) runtime state |
+| `KICKOFF_INGEST` | from `control.json` | Override ingest mode: `vision`, `both`, or `voice` |
 | `KICKOFF_MIC` | system default | Mic index or name substring for narration + screen capture audio |
 
 ## Audio ingest review
