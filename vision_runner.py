@@ -227,14 +227,14 @@ def start(state: dict = None) -> dict:
     """Start the Eye from the saved feed config. Returns a result dict."""
     state = control.load_control() if state is None else state
 
-    ok, reason = is_supported()
-    if not ok:
-        return {"ok": False, "error": reason}
     if status()["running"]:
         return {"ok": False, "error": "The Eye is already running."}
     if not control.feed_ready(state):
         return {"ok": False,
                 "error": "No feed is configured. Set one up on Camera & Feed."}
+    ok, reason = is_supported()
+    if not ok:
+        return {"ok": False, "error": reason}
 
     # A stale pause flag from a previous match would idle the new run instantly.
     _clear_pause_flag()

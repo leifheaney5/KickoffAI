@@ -23,6 +23,16 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.12.1] - 2026-08-17
+
+### Fixed
+
+- Report momentum chart export now falls back to Pillow when `matplotlib` is
+  not installed, so lean installs and CI still generate the expected artifact.
+- The Eye supervisor now reports a missing feed before checking optional vision
+  dependencies, keeping Camera & Feed setup validation clear on CI and fresh
+  installs.
+
 ## [1.12.0] - 2026-08-17
 
 Vision-first ingest. The camera feed becomes the primary way to capture a match

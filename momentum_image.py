@@ -17,6 +17,13 @@ HOME_HEX = "#1E7BFF"   # Pulse Blue (brand)
 AWAY_HEX = "#DC2626"   # red
 INK_HEX = "#111827"
 MUTED_HEX = "#6B7280"
+HOME_RGB = (30, 123, 255)
+HOME_FILL = (216, 232, 255)
+AWAY_RGB = (220, 38, 38)
+AWAY_FILL = (252, 222, 222)
+INK_RGB = (17, 24, 39)
+MUTED_RGB = (107, 114, 128)
+LINE_RGB = (222, 226, 230)
 
 
 def render(events, path, width_px=1040, height_px=420, dpi=130) -> str | None:
@@ -26,9 +33,12 @@ def render(events, path, width_px=1040, height_px=420, dpi=130) -> str | None:
     if len(rows) < 2:
         return None
 
-    import matplotlib
-    matplotlib.use("Agg")  # headless: no display needed
-    import matplotlib.pyplot as plt
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # headless: no display needed
+        import matplotlib.pyplot as plt
+    except Exception:
+        return _render_with_pillow(events, rows, path, width_px, height_px)
 
     xs = [r["minute"] for r in rows]
     ys = [r["momentum"] for r in rows]
@@ -66,4 +76,74 @@ def render(events, path, width_px=1040, height_px=420, dpi=130) -> str | None:
     fig.tight_layout(pad=0.6)
     fig.savefig(path, facecolor="white")
     plt.close(fig)
+    return path
+
+
+def _render_with_pillow(events, rows, path, width_px, height_px) -> str:
+    """Lightweight fallback for CI and lean installs without matplotlib."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (width_px, height_px), "white")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+
+    left, right, top_pad, bottom = 62, 20, 28, 46
+    plot_w = max(width_px - left - right, 1)
+    plot_h = max(height_px - top_pad - bottom, 1)
+    xs = [r["minute"] for r in rows]
+    ys = [r["momentum"] for r in rows]
+    min_x, max_x = min(xs), max(xs)
+    top = max(max(ys), 0.1)
+    bot = min(min(ys), -0.1)
+    top *= 1.15
+    bot *= 1.15
+
+    def x_pos(value):
+        span = max(max_x - min_x, 0.001)
+        return left + (value - min_x) / span * plot_w
+
+    def y_pos(value):
+        span = max(top - bot, 0.001)
+        return top_pad + (top - value) / span * plot_h
+
+    zero_y = y_pos(0)
+    draw.rectangle((left, top_pad, width_px - right, height_px - bottom),
+                   outline=LINE_RGB)
+    draw.line((left, zero_y, width_px - right, zero_y), fill=MUTED_RGB, width=2)
+
+    points = [(x_pos(x), y_pos(y)) for x, y in zip(xs, ys)]
+    for idx in range(len(points) - 1):
+        x1, y1 = points[idx]
+        x2, y2 = points[idx + 1]
+        avg = (ys[idx] + ys[idx + 1]) / 2
+        fill = HOME_FILL if avg >= 0 else AWAY_FILL
+        draw.polygon([(x1, zero_y), (x1, y1), (x2, y2), (x2, zero_y)],
+                     fill=fill)
+    draw.line(points, fill=INK_RGB, width=3, joint="curve")
+
+    for e in events:
+        if e.get("status") == "denied":
+            continue
+        if e.get("action") == "goal" or (e.get("result") or "").lower() == "scored":
+            x = x_pos(IN.parse_minute(e, 0.0))
+            color = HOME_RGB if e.get("team") == "Home" else AWAY_RGB
+            draw.line((x, top_pad, x, height_px - bottom), fill=color, width=2)
+
+    draw.text((left + 6, top_pad + 7), "HOME pressure", fill=HOME_RGB,
+              font=font)
+    draw.text((left + 6, height_px - bottom - 18), "AWAY pressure",
+              fill=AWAY_RGB, font=font)
+    draw.text((left, height_px - 28), "Match minute", fill=MUTED_RGB,
+              font=font)
+    draw.text((left, height_px - 15), f"{min_x:.0f}", fill=MUTED_RGB,
+              font=font)
+    end_label = f"{max_x:.0f}"
+    try:
+        label_w = draw.textlength(end_label, font=font)
+    except AttributeError:
+        label_w = font.getlength(end_label)
+    draw.text((width_px - right - label_w, height_px - 15), end_label,
+              fill=MUTED_RGB, font=font)
+
+    img.save(path)
     return path
