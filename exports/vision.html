@@ -292,6 +292,15 @@ tbody tr:last-child td { border-bottom: 0; }
 .q b { display: block; font-size: 1rem; margin-bottom: .2rem; }
 .q span { color: var(--ink-2); font-size: .96rem; }
 
+figure { margin: 1.6rem 0 0; }
+figure svg { width: 100%; max-width: 100%; height: auto; display: block; }
+figcaption {
+  font-size: .88rem;
+  color: var(--chalk);
+  margin-top: .7rem;
+  line-height: 1.5;
+  text-wrap: balance;
+}
 footer {
   margin-top: 3rem;
   padding-top: 1.5rem;
@@ -542,14 +551,218 @@ footer {
 
   <section>
     <div class="row">
-      <div class="rail"><span class="n">07</span>Sequence</div>
+      <div class="rail"><span class="n">07</span>Own the camera</div>
+      <div class="body">
+        <h2>Veo's best feature is our worst problem</h2>
+        <p class="lede">The case for building our own rig is not cost. It is that
+          an auto-following camera makes pitch-accurate analysis impossible, and
+          the repo has said so in four places for months.</p>
+        <p>A homography maps pixels to metres, and is valid only while the camera
+          does not move. Veo pans by design — so the 4-point calibration shipped
+          in v1.12.0 works perfectly and is <em>unusable</em> on this footage,
+          positions stay in image space, and tracks fragment into ~75 identities
+          for ~22 players.</p>
+
+        <figure>
+          <svg role="img" viewBox="0 0 720 300" aria-label="Two capture paths compared. With Veo, an auto-panning camera sends footage via the vendor cloud; the calibration goes stale each time the camera moves, so positions stay in image space. With a fixed rig, the camera never moves, footage stays on local storage, the calibration holds, and positions become true pitch metres.">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+              </marker>
+              <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5"
+                      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="var(--pulse)"/>
+              </marker>
+            </defs>
+
+            <!-- Row A: Veo -->
+            <text x="0" y="16" font-size="11" font-family="ui-monospace, monospace"
+                  letter-spacing="1.6" fill="currentColor" opacity=".6">TODAY — VEO</text>
+            <rect x="0" y="30" width="120" height="46" rx="3" fill="none"
+                  stroke="currentColor" stroke-width="1.2"/>
+            <text x="60" y="50" font-size="12" text-anchor="middle" fill="currentColor">Camera</text>
+            <text x="60" y="65" font-size="10.5" text-anchor="middle" fill="currentColor" opacity=".65">auto-pans</text>
+
+            <line x1="120" y1="53" x2="196" y2="53" stroke="currentColor"
+                  stroke-width="1.2" marker-end="url(#ar)"/>
+            <text x="158" y="45" font-size="10" text-anchor="middle" fill="currentColor" opacity=".65">uploads</text>
+
+            <rect x="200" y="30" width="120" height="46" rx="3" fill="none"
+                  stroke="currentColor" stroke-width="1.2"/>
+            <text x="260" y="50" font-size="12" text-anchor="middle" fill="currentColor">Vendor cloud</text>
+            <text x="260" y="65" font-size="10.5" text-anchor="middle" fill="currentColor" opacity=".65">export capped</text>
+
+            <line x1="320" y1="53" x2="396" y2="53" stroke="currentColor"
+                  stroke-width="1.2" marker-end="url(#ar)"/>
+            <text x="358" y="45" font-size="10" text-anchor="middle" fill="currentColor" opacity=".65">stream</text>
+
+            <rect x="400" y="30" width="120" height="46" rx="3" fill="none"
+                  stroke="currentColor" stroke-width="1.2"/>
+            <text x="460" y="57" font-size="12" text-anchor="middle" fill="currentColor">The Eye</text>
+
+            <line x1="520" y1="53" x2="596" y2="53" stroke="var(--flag)"
+                  stroke-width="1.2" stroke-dasharray="4 3"/>
+            <rect x="600" y="30" width="120" height="46" rx="3" fill="none"
+                  stroke="var(--flag)" stroke-width="1.4"/>
+            <text x="660" y="50" font-size="12" text-anchor="middle" fill="var(--flag)">Image space</text>
+            <text x="660" y="65" font-size="10.5" text-anchor="middle" fill="var(--flag)" opacity=".8">not metres</text>
+
+            <text x="460" y="98" font-size="10.5" text-anchor="middle" fill="var(--flag)">calibration goes stale on every pan</text>
+
+            <line x1="0" y1="130" x2="720" y2="130" stroke="currentColor" stroke-width="1" opacity=".18"/>
+
+            <!-- Row B: own rig -->
+            <text x="0" y="164" font-size="11" font-family="ui-monospace, monospace"
+                  letter-spacing="1.6" fill="var(--pulse)">PROPOSED — OUR RIG</text>
+            <rect x="0" y="178" width="120" height="46" rx="3" fill="none"
+                  stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="60" y="198" font-size="12" text-anchor="middle" fill="currentColor">Camera</text>
+            <text x="60" y="213" font-size="10.5" text-anchor="middle" fill="var(--pulse)">fixed</text>
+
+            <line x1="120" y1="201" x2="196" y2="201" stroke="var(--pulse)"
+                  stroke-width="1.4" marker-end="url(#arw)"/>
+            <text x="158" y="193" font-size="10" text-anchor="middle" fill="currentColor" opacity=".65">writes</text>
+
+            <rect x="200" y="178" width="120" height="46" rx="3" fill="none"
+                  stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="260" y="198" font-size="12" text-anchor="middle" fill="currentColor">Local SSD</text>
+            <text x="260" y="213" font-size="10.5" text-anchor="middle" fill="currentColor" opacity=".65">raw, uncapped</text>
+
+            <line x1="320" y1="201" x2="396" y2="201" stroke="var(--pulse)"
+                  stroke-width="1.4" marker-end="url(#arw)"/>
+            <text x="358" y="193" font-size="10" text-anchor="middle" fill="currentColor" opacity=".65">RTSP on LAN</text>
+
+            <rect x="400" y="178" width="120" height="46" rx="3" fill="none"
+                  stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="460" y="205" font-size="12" text-anchor="middle" fill="currentColor">The Eye</text>
+
+            <line x1="520" y1="201" x2="596" y2="201" stroke="var(--pulse)"
+                  stroke-width="1.4" marker-end="url(#arw)"/>
+            <rect x="600" y="178" width="120" height="46" rx="3" fill="none"
+                  stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="660" y="198" font-size="12" text-anchor="middle" fill="var(--pulse)">Pitch metres</text>
+            <text x="660" y="213" font-size="10.5" text-anchor="middle" fill="currentColor" opacity=".65">calibration holds</text>
+
+            <text x="460" y="246" font-size="10.5" text-anchor="middle" fill="var(--pulse)">one mounting position, calibrated once</text>
+
+            <text x="260" y="274" font-size="10.5" text-anchor="middle" fill="currentColor" opacity=".7">also: the 1080p footage the retrain has been blocked on</text>
+          </svg>
+          <figcaption>Removing the pan is what turns image space into pitch
+            metres. Owning the storage is what unblocks the retrain.</figcaption>
+        </figure>
+
+        <p>Owning capture clears <strong>both roadmap keystones at once</strong>:
+          a fixed mount makes calibration hold, and holding the raw file supplies
+          the 1080p footage the retrain has waited on since June. It also closes
+          the last gap in the local-first story — today the camera is a cloud
+          vendor's device, uploading footage of children to their servers.</p>
+
+        <div class="note">
+          <strong>Start at Stage 0, not Stage 3.</strong> Mount any action camera
+          high, wide and fixed, and record one match. ~$0–300 and a weekend. It
+          tests every assumption — does one camera cover the pitch, does
+          calibration hold for 90 minutes, do tracks stop fragmenting — and
+          produces the retrain footage regardless. Stage 1 is a ~$500 Raspberry Pi
+          rig that records itself; Stage 2 adds live streaming and needs
+          <em>no app changes at all</em>. Panorama stitching is Stage 3, the
+          interesting engineering problem, and therefore the most tempting mistake.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">08</span>Sequence</div>
       <div class="body">
         <h2>The order of operations</h2>
+        <p class="lede">Two external blockers gate roughly a third of this
+          roadmap. Horizon 2 does not wait on them — which is why it is worth
+          starting either way.</p>
+
+        <figure>
+          <svg role="img" viewBox="0 0 720 330" aria-label="Roadmap dependency map. A 1080p export and a fixed camera rig both feed the retrain, which produces trustworthy vision, which gates player pathways in Horizon 3. Horizon 2 — player surface, safeguarding and a signed app — depends on none of them and can proceed immediately.">
+            <defs>
+              <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5"
+                      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+              </marker>
+              <marker id="a2b" viewBox="0 0 10 10" refX="9" refY="5"
+                      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="var(--pulse)"/>
+              </marker>
+            </defs>
+
+            <!-- Column headers -->
+            <text x="0"   y="14" font-size="10.5" font-family="ui-monospace, monospace" letter-spacing="1.5" fill="currentColor" opacity=".55">BLOCKED ON YOU</text>
+            <text x="270" y="14" font-size="10.5" font-family="ui-monospace, monospace" letter-spacing="1.5" fill="currentColor" opacity=".55">HORIZON 1</text>
+            <text x="530" y="14" font-size="10.5" font-family="ui-monospace, monospace" letter-spacing="1.5" fill="currentColor" opacity=".55">HORIZON 3</text>
+
+            <!-- Blockers -->
+            <rect x="0" y="30" width="180" height="42" rx="3" fill="none" stroke="var(--flag)" stroke-width="1.4"/>
+            <text x="14" y="49" font-size="12" fill="var(--flag)">1080p export</text>
+            <text x="14" y="64" font-size="10.5" fill="currentColor" opacity=".65">or Stage 0 rig footage</text>
+
+            <rect x="0" y="86" width="180" height="42" rx="3" fill="none" stroke="var(--flag)" stroke-width="1.4"/>
+            <text x="14" y="105" font-size="12" fill="var(--flag)">Fixed camera</text>
+            <text x="14" y="120" font-size="10.5" fill="currentColor" opacity=".65">so calibration holds</text>
+
+            <rect x="0" y="142" width="180" height="42" rx="3" fill="none" stroke="var(--flag)" stroke-width="1.4"/>
+            <text x="14" y="161" font-size="12" fill="var(--flag)">Live soak</text>
+            <text x="14" y="176" font-size="10.5" fill="currentColor" opacity=".65">a real stream, 90 min</text>
+
+            <!-- Arrows into H1 -->
+            <line x1="180" y1="51"  x2="266" y2="88" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+            <line x1="180" y1="107" x2="266" y2="100" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+            <line x1="180" y1="163" x2="266" y2="112" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+
+            <!-- H1 -->
+            <rect x="270" y="78" width="180" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <text x="284" y="98" font-size="12" fill="currentColor">Trustworthy vision</text>
+            <text x="284" y="113" font-size="10.5" fill="currentColor" opacity=".65">measured, not indicative</text>
+
+            <rect x="270" y="136" width="180" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".75"/>
+            <text x="284" y="156" font-size="12" fill="currentColor">Coaching loop</text>
+            <text x="284" y="171" font-size="10.5" fill="currentColor" opacity=".65">scouting · training links</text>
+
+            <!-- H1 -> H3 -->
+            <line x1="450" y1="100" x2="526" y2="100" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+            <text x="488" y="92" font-size="10" text-anchor="middle" fill="currentColor" opacity=".6">gates</text>
+
+            <rect x="530" y="78" width="180" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <text x="544" y="98" font-size="12" fill="currentColor">Player pathways</text>
+            <text x="544" y="113" font-size="10.5" fill="currentColor" opacity=".65">U12 → U16, club-wide</text>
+
+            <!-- Divider -->
+            <line x1="0" y1="212" x2="720" y2="212" stroke="currentColor" stroke-width="1" opacity=".18"/>
+
+            <!-- H2, unblocked -->
+            <text x="270" y="240" font-size="10.5" font-family="ui-monospace, monospace" letter-spacing="1.5" fill="var(--pulse)">HORIZON 2 — NOT BLOCKED</text>
+
+            <rect x="270" y="252" width="180" height="44" rx="3" fill="none" stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="284" y="272" font-size="12" fill="currentColor">Player surface</text>
+            <text x="284" y="287" font-size="10.5" fill="currentColor" opacity=".65">safeguarding · signed app</text>
+
+            <line x1="450" y1="274" x2="526" y2="274" stroke="var(--pulse)" stroke-width="1.4" marker-end="url(#a2b)"/>
+            <text x="488" y="266" font-size="10" text-anchor="middle" fill="currentColor" opacity=".6">enables</text>
+
+            <rect x="530" y="252" width="180" height="44" rx="3" fill="none" stroke="var(--pulse)" stroke-width="1.4"/>
+            <text x="544" y="272" font-size="12" fill="currentColor">Club platform</text>
+            <text x="544" y="287" font-size="10.5" fill="currentColor" opacity=".65">dashboards · reporting</text>
+
+            <text x="0" y="274" font-size="10.5" fill="currentColor" opacity=".7">Nothing above</text>
+            <text x="0" y="289" font-size="10.5" fill="currentColor" opacity=".7">gates this row.</text>
+          </svg>
+          <figcaption>Everything red is waiting on you, not on code — and a
+            Stage 0 rig clears the top two at once.</figcaption>
+        </figure>
+
         <div class="seq">
           <div class="step">
             <div class="when">Now</div>
-            <div class="what"><b>Trustworthy vision</b>
-              <span>Retrain · live soak · opponent scouting · training links</span></div>
+            <div class="what"><b>Stage 0 rig + retrain</b>
+              <span>One fixed camera, one match, one weekend — clears both keystones</span></div>
           </div>
           <div class="step">
             <div class="when">Horizon 2</div>
@@ -568,7 +781,7 @@ footer {
 
   <section>
     <div class="row">
-      <div class="rail"><span class="n">08</span>Open</div>
+      <div class="rail"><span class="n">09</span>Open</div>
       <div class="body">
         <h2>Questions only you can answer</h2>
         <div class="q"><b>Is this a product or a personal tool?</b>

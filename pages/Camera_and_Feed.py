@@ -238,9 +238,29 @@ st.markdown(brand.section("Pitch calibration"), unsafe_allow_html=True)
 CAL_KEY = "kp_cal"
 saved_cal = vcal.load_calibration() if VISION_OK else None
 
+# A calibration maps pixels to pitch metres only while the camera stays still.
+# On an auto-following camera it is stale the moment play moves, so this has to
+# be declared rather than assumed — it decides whether calibrated positions can
+# be believed at all. See HARDWARE_PROPOSAL.md.
+fixed_cam = st.checkbox(
+    "The camera is fixed (it does not pan or auto-follow)",
+    value=bool(feed.get("fixed_camera", False)),
+    help="Veo and similar cameras crop and pan to follow play, which invalidates "
+         "a saved calibration continuously. A camera clamped to a mast does not.")
+if fixed_cam != bool(feed.get("fixed_camera", False)):
+    state["feed"]["fixed_camera"] = fixed_cam
+    control.save_control(state)
+    st.rerun()
+
+if not fixed_cam:
+    st.caption("Because the camera moves, calibration below will not hold for a "
+               "whole match and positions stay in image space. A fixed mount is "
+               "what makes pitch-accurate positions possible.")
+
 if saved_cal:
     st.success(f"Calibrated · {len(saved_cal['points'])} points · "
-               f"saved {saved_cal.get('created', '')}")
+               f"saved {saved_cal.get('created', '')}"
+               + ("" if fixed_cam else " · but the camera pans, so it goes stale"))
 else:
     st.warning(
         "Not calibrated. Analysis still runs, but positions stay in image "

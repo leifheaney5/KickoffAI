@@ -253,3 +253,97 @@ def test_a_pack_works_with_no_clips_at_all(tmp_path):
 
     assert pack["clips"] == []
     assert pack["card_bytes"]
+
+
+# --------------------------------------------------------------------------- #
+# Fixed vs panning camera
+#
+# A homography maps pixels to metres only while the camera stays still. An
+# auto-following camera makes a saved calibration stale continuously — the
+# central argument of HARDWARE_PROPOSAL.md, so the trust gate has to know.
+# --------------------------------------------------------------------------- #
+def _rq(**over):
+    base = {"frames_processed": 5000, "ball_detection_rate": 0.5,
+            "reconnects": 0, "calibrated": True, "fixed_camera": True}
+    base.update(over)
+    return base
+
+
+def test_a_fixed_calibrated_camera_raises_no_caveat():
+    import quality as Q
+
+    reasons = " ".join(Q.assess(_rq())["reasons"])
+
+    assert "stale" not in reasons
+    assert "image-space" not in reasons
+
+
+def test_a_panning_camera_invalidates_its_own_calibration():
+    """Calibrated but moving is the trap: the mapping exists and cannot hold."""
+    import quality as Q
+
+    reasons = " ".join(Q.assess(_rq(fixed_camera=False))["reasons"])
+
+    assert "pans" in reasons and "stale" in reasons
+
+
+def test_an_uncalibrated_camera_says_so_regardless_of_motion():
+    import quality as Q
+
+    for fixed in (True, False):
+        reasons = " ".join(Q.assess(_rq(calibrated=False,
+                                        fixed_camera=fixed))["reasons"])
+        assert "uncalibrated" in reasons
+
+
+def test_camera_motion_does_not_change_the_verdict():
+    """It changes what the numbers *mean*, not whether they were measured."""
+    import quality as Q
+
+    assert (Q.assess(_rq(fixed_camera=True))["verdict"]
+            == Q.assess(_rq(fixed_camera=False))["verdict"] == Q.MEASURED)
+
+
+# --------------------------------------------------------------------------- #
+# Rig capture agent
+# --------------------------------------------------------------------------- #
+def _rig_args(**over):
+    import argparse
+    d = {"input": "/dev/video0", "size": "1920x1080", "fps": 30,
+         "codec": "libx264", "preset": "veryfast", "crf": 23, "duration": 0,
+         "serve": False, "rtsp_host": "127.0.0.1", "rtsp_port": 8554,
+         "name": "match"}
+    d.update(over)
+    return argparse.Namespace(**d)
+
+
+def test_rig_records_locally_even_when_streaming():
+    """The reliability argument: a network failure must never cost the footage."""
+    sys_path_guard = None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "rig_capture", "scripts/rig_capture.py")
+    rig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rig)
+
+    cmd = " ".join(rig.build_command(_rig_args(serve=True), "/out/match.mp4"))
+
+    assert "tee" in cmd
+    assert "/out/match.mp4" in cmd            # the file is still written
+    assert "rtsp://127.0.0.1:8554/match" in cmd
+    # The file sink is listed first, so a failing stream muxer cannot take the
+    # recording with it.
+    assert cmd.index("[f=mp4]") < cmd.index("[f=rtsp]")
+
+
+def test_rig_without_serving_writes_only_a_file():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "rig_capture", "scripts/rig_capture.py")
+    rig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rig)
+
+    cmd = " ".join(rig.build_command(_rig_args(serve=False), "/out/m.mp4"))
+
+    assert "rtsp" not in cmd and "tee" not in cmd
+    assert cmd.endswith("/out/m.mp4")

@@ -119,6 +119,12 @@ DEFAULT = {
         "stride": 6,
         "imgsz": 960,
         "conf": 0.25,
+        # Does the camera stay still? A 4-point pitch calibration maps pixels to
+        # metres only while the camera does not move, so an auto-following camera
+        # (Veo) makes a saved calibration stale the moment it pans. Declaring
+        # this lets the trust gate say whether calibrated positions can be
+        # believed, instead of assuming.
+        "fixed_camera": False,
     },
     "noise_gate": 30,
     "audio_chunking": {

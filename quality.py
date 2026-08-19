@@ -101,8 +101,15 @@ def assess(run_quality: dict) -> dict:
     # An uncalibrated run is in image space, so distances are not metric. Only
     # worth saying when a run actually happened; "uncalibrated" is meaningless
     # when there was no camera run at all.
+    fixed = bool(rq.get("fixed_camera", False))
     if rq and not calibrated:
         reasons.append("uncalibrated camera, so positions are image-space")
+    elif rq and calibrated and not fixed:
+        # The trap worth naming: a calibration that exists but cannot hold. A
+        # homography is only valid while the camera is still, so on an
+        # auto-following camera it goes stale the moment play moves.
+        reasons.append("calibrated, but the camera pans — the mapping goes stale, "
+                       "so treat positions as image-space anyway")
 
     return {
         "verdict": verdict,

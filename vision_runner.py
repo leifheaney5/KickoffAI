@@ -216,6 +216,8 @@ def build_argv(state: dict) -> list[str]:
         "--imgsz", str(int(feed.get("imgsz", 960) or 960)),
         "--conf", str(float(feed.get("conf", 0.25) or 0.25)),
     ]
+    if feed.get("fixed_camera"):
+        argv.append("--fixed-camera")
     if feed.get("kind") == "webcam":
         argv += ["--camera", str(int(source or 0))]
     else:

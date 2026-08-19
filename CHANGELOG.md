@@ -23,6 +23,42 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.19.0] - 2026-08-19
+
+Own the capture. Proposal: `HARDWARE_PROPOSAL.md`.
+
+### Added
+
+- **`scripts/rig_capture.py`** — the capture agent for our own camera rig.
+  Records to local storage **first** and streams second, which is the whole
+  reliability argument: if the wifi drops or the laptop dies, the footage is
+  still on the rig's SSD. One encode, two sinks via ffmpeg `tee`, with the file
+  listed first so a failing stream muxer cannot take the recording with it.
+  Pi-oriented but not Pi-specific — it drives ffmpeg, so a laptop webcam works
+  for testing.
+- **`feed.fixed_camera`** — a declaration that the camera does not pan, surfaced
+  on Camera & Feed and carried into every run's `run_quality`.
+
+### Changed
+
+- **The trust gate now knows the difference between a fixed and a panning
+  camera.** A homography maps pixels to metres only while the camera stays
+  still, so on an auto-following camera a saved calibration is stale the moment
+  play moves. `quality.assess()` previously treated "calibrated" as good news
+  unconditionally; it now names the trap — *calibrated, but the camera pans, so
+  treat positions as image-space anyway*. This is the same fact the repo has
+  recorded in four places (`ROADMAP.md`, `NEXT_STEPS.md`) without the app ever
+  acting on it.
+
+### Notes
+
+The hardware case is not primarily about cost. Veo's auto-following camera is
+the single largest obstacle to spatial analysis here: it invalidates calibration
+continuously and fragments tracks into ~75 identities for ~22 players. A fixed
+mount fixes all of that on day one with no model work — and owning the storage
+supplies the 1080p footage the retrain has been blocked on since June. Both
+roadmap keystones, cleared by one weekend of Stage 0.
+
 ## [1.18.0] - 2026-08-19
 
 Clips, player development, and share packs — the moment, the trend, and a way to

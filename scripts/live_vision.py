@@ -163,6 +163,9 @@ def main(argv=None) -> int:
     p.add_argument("--pause-flag", default=".live_eye_paused",
                    help="While this file exists, the runner pauses capture "
                         "(e.g. at half-time) without losing accumulated stats.")
+    p.add_argument("--fixed-camera", action="store_true",
+                   help="The camera does not pan, so a saved pitch calibration "
+                        "stays valid for the whole match.")
     p.add_argument("--status-file", default="live_eye_status.json",
                    help="Small JSON health file the app polls for live chips.")
     args = p.parse_args(argv)
@@ -234,6 +237,9 @@ def main(argv=None) -> int:
             "duration_seconds": round(now - run_started, 1),
             "paused_seconds": round(paused_seconds, 1),
             "calibrated": analyzer.homography is not None,
+            # Declared on Camera & Feed. A calibration is only meaningful while
+            # the camera stays still; see quality.assess().
+            "fixed_camera": bool(args.fixed_camera),
             "coordinate_space": ("pitch" if analyzer.homography is not None
                                  else "image"),
             "model": args.model,
