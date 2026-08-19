@@ -31,6 +31,11 @@ import timeline_image as TL
 
 REPORTS_DIR = os.environ.get("KICKOFF_REPORTS_DIR", "exports")
 
+# The Eye's output. Read alongside the audio event log so the report can show
+# both what was heard and what was seen, each labelled with its own provenance.
+VISION_STATS_FILE = os.environ.get("KICKOFF_VISION_STATS_FILE",
+                                   "match_stats.json")
+
 HOME_RGB = (30, 123, 255)   # Pulse Blue (brand)
 AWAY_RGB = (220, 38, 38)    # red
 NAVY_RGB = (7, 26, 61)      # Primary Navy (brand)
@@ -84,6 +89,49 @@ DERIVED_STAT_KEYS = [
     "Defensive Actions",
     "Total Cards",
 ]
+
+
+def load_vision(stats_path: str = None) -> dict:
+    """Load the vision document + its trust verdict, or {} when there is none.
+
+    Returns {"possession": (home, away), "passes": n, "quality": {...}} so the
+    report can present vision figures beside the audio ones without either
+    silently overriding the other.
+    """
+    import quality as Q
+
+    stats_path = stats_path or VISION_STATS_FILE
+    if not os.path.exists(stats_path):
+        return {}
+    try:
+        with open(stats_path, "r", encoding="utf-8") as fh:
+            stats = json.load(fh)
+    except (ValueError, OSError):
+        return {}
+    if not isinstance(stats, dict):
+        return {}
+
+    ev = stats.get("statistical_events", {}) or {}
+    poss = ev.get("possession_summary", {}) or {}
+    assessment = Q.assess_stats(stats)
+    if not Q.is_usable(assessment):
+        # Still return the assessment: the report should say the Eye ran and
+        # produced nothing usable, rather than staying silent about it.
+        return {"quality": assessment, "usable": False}
+    return {
+        "possession": (float(poss.get("team_home_percentage", 0.0)),
+                       float(poss.get("team_away_percentage", 0.0))),
+        "passes": len(ev.get("passing_stats", []) or []),
+        "quality": assessment,
+        "usable": True,
+    }
+
+
+def _vision_weight(vision) -> float:
+    """How heavily camera events should count toward momentum for this match."""
+    import quality as Q
+
+    return Q.momentum_weight((vision or {}).get("quality"))
 
 
 def _half_stat_pair(home_half: dict, away_half: dict, key: str) -> tuple:
@@ -695,7 +743,7 @@ def _lineup_heading(lineups, team) -> str:
 # Plain-text report
 # --------------------------------------------------------------------------- #
 def build_text(events, data, summary, clock, match_name="", lineups=None,
-               notes=None, written_notes=None) -> str:
+               notes=None, written_notes=None, vision=None) -> str:
     home, away = data["home"], data["away"]
     match_date = _match_date(events)
     L = []
@@ -770,7 +818,31 @@ def build_text(events, data, summary, clock, match_name="", lineups=None,
     L.append(f"{h_acc:>10}   {'Shot Accuracy':^18}   {a_acc:<10}")
     L.append(f"{f'{_conversion(home)}%':>10}   {'Shot Conversion':^18}   "
              f"{f'{_conversion(away)}%':<10}")
-    leader, _strength = IN.momentum_leader(events)
+
+    # Camera analysis, as its own labelled series — never merged into the
+    # play-by-play figures above.
+    if vision:
+        q = vision.get("quality") or {}
+        L.append("")
+        rule("-")
+        L.append("CAMERA ANALYSIS (THE EYE)")
+        rule("-")
+        L.append(f"Reliability: {q.get('label', 'Unusable')}")
+        L.append(f"  {q.get('blurb', '')}")
+        if vision.get("usable"):
+            vh, va = vision["possession"]
+            L.append(f"{f'{vh:.0f}%':>10}   {'Possession (seen)':^18}   "
+                     f"{f'{va:.0f}%':<10}")
+            L.append(f"  Play-by-play possession above: Home {hp}% / Away {ap}%")
+            L.append(f"  Passes detected: {vision.get('passes', 0)}")
+            gap = abs(vh - hp)
+            if gap >= 15:
+                L.append(f"  Note: the two methods differ by {gap:.0f} points "
+                         f"- worth a review, not necessarily an error.")
+        L.append("  Why: " + "; ".join(q.get("reasons") or ["no detail"]) + ".")
+
+    leader, _strength = IN.momentum_leader(events,
+                                           vision_weight=_vision_weight(vision))
     if leader:
         L.append(f"  {leader} finished the stronger side.")
     L.append("")
@@ -821,7 +893,7 @@ def _pdf_safe(s) -> str:
 # --------------------------------------------------------------------------- #
 def build_pdf(events, data, summary, clock, path,
               match_name="", lineups=None, notes=None, written_notes=None,
-              momentum_png=None, home_logo=None, away_logo=None):
+              momentum_png=None, home_logo=None, away_logo=None, vision=None):
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
@@ -1069,7 +1141,8 @@ def build_pdf(events, data, summary, clock, path,
     pdf.cell(hw, bh, f" Home {hp}%", align="L")
     pdf.cell(bw - hw, bh, f"Away {ap}% ", align="R")
     pdf.ln(bh + 2)
-    leader, _strength = IN.momentum_leader(events)
+    leader, _strength = IN.momentum_leader(events,
+                                           vision_weight=_vision_weight(vision))
     momentum = f"{leader} finished stronger" if leader else "Even"
     home_extra, away_extra = _derived_stats(home), _derived_stats(away)
     pdf.set_x(lm + 4)
@@ -1087,6 +1160,57 @@ def build_pdf(events, data, summary, clock, path,
     pdf.ln(1)
     frame(y0)
     pdf.ln(3)
+
+    # ---- Vision (the Eye) -------------------------------------------------- #
+    # Shown as its OWN series next to the audio figures above, never blended
+    # into them. When the two disagree that disagreement is information; folding
+    # a low-confidence vision number into the headline stat would destroy it.
+    if vision:
+        q = vision.get("quality") or {}
+        section("Camera Analysis")
+        y0 = pdf.get_y()
+        pdf.ln(2)
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*INK)
+        pdf.cell(0, 6, _pdf_safe(f"Reliability: {q.get('label', 'Unusable')}"),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*MUTED)
+        pdf.multi_cell(epw - 8, 5, _pdf_safe(q.get("blurb", "")))
+
+        if vision.get("usable"):
+            vh, va = vision["possession"]
+            pdf.set_x(lm + 4)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(*INK)
+            pdf.cell(0, 6, _pdf_safe(
+                f"Possession seen by camera: Home {vh:.0f}%  /  Away {va:.0f}%"),
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_x(lm + 4)
+            pdf.set_text_color(*MUTED)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(0, 5, _pdf_safe(
+                f"Play-by-play possession above: Home {hp}%  /  Away {ap}%."
+                f"        Passes detected: {vision.get('passes', 0)}"),
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            gap = abs(vh - hp)
+            if gap >= 15:
+                pdf.set_x(lm + 4)
+                pdf.multi_cell(epw - 8, 5, _pdf_safe(
+                    f"Note: the two methods differ by {gap:.0f} points. The "
+                    f"camera measures ball proximity; the play-by-play counts "
+                    f"logged events. Treat the gap as a prompt to review, not "
+                    f"as an error."))
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*MUTED)
+        pdf.multi_cell(epw - 8, 5, _pdf_safe("Why: " + "; ".join(
+            q.get("reasons") or ["no detail recorded"]) + "."))
+        pdf.ln(1)
+        frame(y0)
+        pdf.ln(3)
 
     # ---- Momentum graph --------------------------------------------------- #
     if momentum_png and os.path.exists(momentum_png):
@@ -1264,12 +1388,17 @@ def _match_date(events) -> str:
 
 def generate(events=None, summary="", clock="", out_dir=None,
              data_file=None, archive=True, match_name="", lineups=None,
-             notes=None, written_notes=None, home_logo=None, away_logo=None) -> dict:
+             notes=None, written_notes=None, home_logo=None, away_logo=None,
+             vision=None, vision_stats=None) -> dict:
     """Generate txt + pdf reports (and archive data). Returns the paths.
 
     `home_logo`/`away_logo` are optional crest image paths; when omitted they
     default to branding/teams/home.* and away.* if present. `notes` are captured
     voice notes by default; pass `written_notes` for typed coach notes.
+
+    `vision` is the camera-analysis block (see :func:`load_vision`); by default
+    it is loaded from `vision_stats` / match_stats.json when that file exists.
+    Pass `vision={}` to omit the camera section entirely.
     """
     out_dir = out_dir or REPORTS_DIR
     os.makedirs(out_dir, exist_ok=True)
@@ -1280,6 +1409,8 @@ def generate(events=None, summary="", clock="", out_dir=None,
         events = S.load_events(data_file)
     if notes is None:
         notes = control.load_notes()
+    if vision is None:
+        vision = load_vision(vision_stats)
 
     data = _collect(events)
     # Intuitive filename base: teams + match date, e.g.
@@ -1307,17 +1438,19 @@ def generate(events=None, summary="", clock="", out_dir=None,
     # Render the momentum graph (embedded in the PDF + saved alongside).
     try:
         import momentum_image as MOM
-        mom_path = MOM.render(events, mom_path)
+        mom_path = MOM.render(events, mom_path,
+                              vision_weight=_vision_weight(vision))
     except Exception:
         mom_path = None
 
     with open(txt_path, "w", encoding="utf-8") as fh:
         fh.write(build_text(events, data, summary, clock, match_name, lineups,
-                            notes, written_notes))
+                            notes, written_notes, vision=vision))
     build_pdf(events, data, summary, clock, pdf_path,
               match_name=match_name, lineups=lineups, notes=notes,
               written_notes=written_notes,
-              momentum_png=mom_path, home_logo=home_logo, away_logo=away_logo)
+              momentum_png=mom_path, home_logo=home_logo, away_logo=away_logo,
+              vision=vision)
     with open(report_json_path, "w", encoding="utf-8") as fh:
         json.dump(
             build_json_payload(events, data, summary, clock, match_name,

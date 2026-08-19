@@ -47,12 +47,24 @@ def parse_minute(e: dict, fallback: float) -> float:
     return minute
 
 
-def momentum_series(events: list, decay: float = 0.82) -> list:
-    """Decaying momentum over time.
+def event_source(e: dict) -> str:
+    """Which ingest logged this event: "vision" (the Eye) or "audio" (the mic)."""
+    return "vision" if (e.get("source") == "vision") else "audio"
+
+
+def momentum_series(events: list, decay: float = 0.82,
+                    vision_weight: float = 1.0) -> list:
+    """Decaying momentum over time, fusing both ingests.
 
     Each row: {minute, momentum, home, away}. momentum > 0 = Home pressure,
     < 0 = Away. Recent events dominate (older ones decay toward zero), so the
     curve reads like a pressure wave rather than a cumulative tally.
+
+    ``vision_weight`` scales the contribution of camera-derived events (see
+    quality.momentum_weight). A run where the Eye barely saw the ball would
+    otherwise produce a confident-looking curve built on noise, so a poor run
+    nudges the line rather than driving it. 1.0 treats both ingests equally;
+    0.0 makes the curve audio-only.
     """
     rows = []
     m = 0.0
@@ -61,6 +73,8 @@ def momentum_series(events: list, decay: float = 0.82) -> list:
         team = e.get("team")
         if team in ("Home", "Away"):
             w = event_weight(e)
+            if event_source(e) == "vision":
+                w *= vision_weight
             m = m * decay + (w if team == "Home" else -w)
         else:
             m *= decay
@@ -75,9 +89,9 @@ def momentum_series(events: list, decay: float = 0.82) -> list:
     return rows
 
 
-def momentum_leader(events: list):
+def momentum_leader(events: list, vision_weight: float = 1.0):
     """('Home'|'Away'|None, strength) from the final momentum value."""
-    rows = momentum_series(events)
+    rows = momentum_series(events, vision_weight=vision_weight)
     if not rows:
         return None, 0.0
     m = rows[-1]["momentum"]
@@ -86,17 +100,62 @@ def momentum_leader(events: list):
     return ("Home" if m > 0 else "Away"), abs(m)
 
 
-def key_moments(events: list, max_momentum: int = 4) -> list:
+def vision_pressure(events: list, window: float = 3.0, min_passes: int = 6) -> list:
+    """Passages where the camera saw one side stringing passes together.
+
+    A burst of vision-detected passes by a single team inside a short window is
+    the Eye's own read on who is controlling the ball — independent of anything
+    the mic heard. Returns [{minute, team, passes}] for the densest passages.
+
+    This is deliberately built from bridged pass events rather than by re-parsing
+    the multi-megabyte tracking document: the passes already carry a minute and a
+    team, and the report should not need the frame data to say something useful.
+    """
+    vpasses = [e for e in events
+               if event_source(e) == "vision"
+               and (e.get("action") or "").lower() == "pass"
+               and e.get("team") in ("Home", "Away")
+               and e.get("status") != "denied"]
+    if not vpasses:
+        return []
+
+    timed = sorted(((parse_minute(e, 0.0), e["team"]) for e in vpasses),
+                   key=lambda p: p[0])
+    passages, i = [], 0
+    while i < len(timed):
+        start, team = timed[i]
+        j, count = i, 0
+        while j < len(timed) and timed[j][0] - start <= window:
+            if timed[j][1] == team:
+                count += 1
+            j += 1
+        if count >= min_passes:
+            passages.append({"minute": round(start, 2), "team": team,
+                             "passes": count})
+            i = j                      # don't re-report the same passage
+        else:
+            i += 1
+    return passages
+
+
+def key_moments(events: list, max_momentum: int = 4, vision_weight: float = 1.0,
+                max_vision: int = 4) -> list:
     """Auto-tag the match's notable moments for the report.
 
-    Combines discrete events (goals, red/yellow cards, shots on target) with
-    momentum analysis (sustained-pressure peaks), so a coach sees the turning
-    points at a glance. Returns a list of dicts sorted by match minute::
+    Fuses three signals so a coach sees the turning points at a glance:
 
-        {minute, mmss, team, type, label, source}
+      * discrete play-by-play events (goals, cards, shots on target)
+      * momentum peaks (sustained pressure, blending everything logged)
+      * camera-seen passing passages (what the Eye watched, independent of audio)
 
-    ``source`` is "audio" (a logged play-by-play event) or "momentum" (derived
-    from the momentum curve, which blends every event the log carries).
+    Returns dicts sorted by match minute::
+
+        {minute, mmss, team, type, label, source, confirmed}
+
+    ``source`` is "audio", "momentum" or "vision". ``confirmed`` is True when a
+    *different* ingest independently flagged the same team around the same
+    minute — the one thing neither stream can establish alone, and the strongest
+    signal in the list.
     """
     moments = []
 
@@ -131,7 +190,7 @@ def key_moments(events: list, max_momentum: int = 4) -> list:
 
     # Sustained-pressure peaks: local maxima of |momentum| above a threshold,
     # spaced apart so we surface distinct passages rather than one long run.
-    rows = momentum_series(events)
+    rows = momentum_series(events, vision_weight=vision_weight)
     peaks = []
     THRESH, SPACING = 2.5, 4.0  # strength units, minutes apart
     for i in range(1, len(rows) - 1):
@@ -150,12 +209,38 @@ def key_moments(events: list, max_momentum: int = 4) -> list:
     peaks.sort(key=lambda p: abs(p["minute"]))
     peaks = sorted(peaks, key=lambda p: p["minute"])[:max_momentum]
 
-    return sorted(discrete + peaks, key=lambda m: m["minute"])
+    # What the camera saw, on its own terms. Skipped when the run was too poor
+    # to contribute (vision_weight 0), so an unusable run adds no noise.
+    seen = []
+    if vision_weight > 0:
+        for p in vision_pressure(events)[:max_vision]:
+            seen.append({
+                "minute": p["minute"], "mmss": mmss(p["minute"]),
+                "team": p["team"], "type": "vision_pressure",
+                "label": f"Camera: {p['team']} keeping the ball "
+                         f"({p['passes']} passes)",
+                "source": "vision"})
+
+    out = sorted(discrete + peaks + seen, key=lambda m: m["minute"])
+
+    # Cross-source confirmation: mark moments that a *different* ingest also
+    # flagged for the same team nearby. Agreement between an ear and an eye is
+    # far stronger evidence than either alone, so it is worth surfacing.
+    CONFIRM_WINDOW = 3.0
+    for m in out:
+        m["confirmed"] = any(
+            o is not m
+            and o["team"] == m["team"]
+            and o["source"] != m["source"]
+            and abs(o["minute"] - m["minute"]) <= CONFIRM_WINDOW
+            for o in out)
+    return out
 
 
-def headline_metrics(events: list, home: dict, away: dict) -> dict:
+def headline_metrics(events: list, home: dict, away: dict,
+                     vision_weight: float = 1.0) -> dict:
     """A few glanceable numbers for the top of the Insights page."""
-    leader, strength = momentum_leader(events)
+    leader, strength = momentum_leader(events, vision_weight=vision_weight)
 
     def conversion(team):
         return round(100 * team["Goals"] / team["Shots"]) if team["Shots"] else 0

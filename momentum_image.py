@@ -26,10 +26,15 @@ MUTED_RGB = (107, 114, 128)
 LINE_RGB = (222, 226, 230)
 
 
-def render(events, path, width_px=1040, height_px=420, dpi=130) -> str | None:
+def render(events, path, width_px=1040, height_px=420, dpi=130,
+           vision_weight: float = 1.0) -> str | None:
     """Render the momentum chart to `path`. Returns the path, or None if there
-    is nothing to plot (so callers can simply skip the section)."""
-    rows = IN.momentum_series(events)
+    is nothing to plot (so callers can simply skip the section).
+
+    ``vision_weight`` scales camera-derived events in the underlying series so a
+    low-confidence vision run cannot dominate the curve (see quality.py).
+    """
+    rows = IN.momentum_series(events, vision_weight=vision_weight)
     if len(rows) < 2:
         return None
 
@@ -38,6 +43,12 @@ def render(events, path, width_px=1040, height_px=420, dpi=130) -> str | None:
         matplotlib.use("Agg")  # headless: no display needed
         import matplotlib.pyplot as plt
     except Exception:
+        # The fallback draws a visibly different chart (pale fills, solid goal
+        # markers, no gridlines). Say which renderer ran so a report that looks
+        # unfamiliar is explainable rather than mysterious.
+        print("[momentum] matplotlib unavailable - using the Pillow fallback "
+              "renderer; the chart will look different to the usual one.",
+              flush=True)
         return _render_with_pillow(events, rows, path, width_px, height_px)
 
     xs = [r["minute"] for r in rows]

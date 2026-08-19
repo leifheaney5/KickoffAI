@@ -321,8 +321,15 @@ class MatchAnalyzer:
                 self.on_frame(record)
             return self._raw_index, frame, self._last_detections, record
 
-    def close(self) -> MatchStats:
-        """Release the source and assemble + save the stats document."""
+    def close(self, save: bool = True) -> MatchStats:
+        """Release the source and assemble the stats document.
+
+        ``save`` writes the document to ``config.output_path``. Callers that
+        maintain their own richer document — the live runner attaches a
+        ``run_quality`` block this method knows nothing about — should pass
+        ``save=False`` and write it themselves, otherwise this save silently
+        overwrites theirs with a less complete version.
+        """
         cap = getattr(self, "_cap", None)
         if cap is not None:
             cap.release()
@@ -335,7 +342,8 @@ class MatchAnalyzer:
             possession=self.engine.possession_summary(),
             coordinate_space="pitch" if self.homography is not None else "image",
         )
-        stats.save(self.config.output_path)
+        if save:
+            stats.save(self.config.output_path)
         return stats
 
     # ------------------------------------------------------------------ #

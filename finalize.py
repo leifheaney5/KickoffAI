@@ -112,10 +112,21 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
                 if p:
                     library.register_file(s, match, kind, p, label)
 
-            # Vision output, if a run produced one.
+            # Vision output, if a run produced one. The full document is stored
+            # as a media file; its headline figures are flattened onto the match
+            # row so season trends can query them without opening every JSON.
             if os.path.exists("match_stats.json"):
                 library.register_file(s, match, "data_json", "match_stats.json",
                                       "Vision stats (JSON)")
+                vision = report.load_vision("match_stats.json")
+                q = vision.get("quality") or {}
+                match.vision_verdict = q.get("verdict", "") or ""
+                match.vision_ball_rate = float(q.get("ball_detection_rate", 0.0))
+                if vision.get("usable"):
+                    vh, va = vision["possession"]
+                    match.vision_home_possession = float(vh)
+                    match.vision_away_possession = float(va)
+                    match.vision_passes = int(vision.get("passes", 0))
 
             # Recorded voice notes (keep the originals).
             for n in notes:
@@ -135,7 +146,10 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
                     match_id=match.id, match_time=e.get("match_time"),
                     team=e.get("team"), player=e.get("player"),
                     action=e.get("action"), result=e.get("result"),
-                    location=e.get("location"), raw_text=e.get("raw_text")))
+                    location=e.get("location"), raw_text=e.get("raw_text"),
+                    # Preserve which ingest produced this. Untagged events are
+                    # from the mic; the bridge tags vision events explicitly.
+                    source=e.get("source") or "audio"))
 
             slug = match.slug
             match_id = match.id

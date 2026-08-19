@@ -93,13 +93,9 @@ def write_status(path: str, payload: dict) -> None:
         pass
 
 
-def checkpoint(analyzer: MatchAnalyzer, args) -> int:
-    """Assemble + save the current stats and bridge passes into the dashboard.
-
-    Returns the number of vision pass events written. Does NOT release the
-    capture, so the live loop keeps running after a checkpoint.
-    """
-    stats = MatchStats(
+def build_stats(analyzer: MatchAnalyzer, run_quality: dict = None) -> MatchStats:
+    """Assemble the current match document from the analyzer's live state."""
+    return MatchStats(
         frame_rate_sampled=analyzer.config.sampled_fps_label(
             getattr(analyzer, "_source_fps", 30.0)
         ),
@@ -107,11 +103,30 @@ def checkpoint(analyzer: MatchAnalyzer, args) -> int:
         passes=analyzer.engine.events,
         possession=analyzer.engine.possession_summary(),
         coordinate_space="pitch" if analyzer.homography is not None else "image",
+        run_quality=run_quality or {},
     )
-    stats.save(args.stats)
+
+
+def checkpoint(analyzer: MatchAnalyzer, args, run_quality: dict = None,
+               full: bool = True) -> int:
+    """Bridge passes into the dashboard and, when ``full``, save the document.
+
+    Returns the number of vision pass events written. Does NOT release the
+    capture, so the live loop keeps running after a checkpoint.
+
+    The two halves are deliberately on different cadences. Serialising the
+    per-frame tracking data dominates the cost — ~9.5 MB and ~250 ms at the
+    4000-frame bound — and that time is a stall on the capture loop, so doing it
+    every 10s drops frames all match. The dashboard bridge only reads
+    `statistical_events`, which is tiny, so it stays frequent while the full
+    document is written on a slower cadence (and always on exit).
+    """
+    stats = build_stats(analyzer, run_quality)
+    if full:
+        stats.save(args.stats)
 
     if not args.no_dashboard:
-        events = vbridge.convert(stats.to_dict())
+        events = vbridge.convert(stats.stats_dict())
         vbridge.write_events(events, args.data_file, fresh=False, replace_vision=True)
         return len(events)
     return 0
@@ -132,7 +147,12 @@ def main(argv=None) -> int:
     p.add_argument("--stats", default="match_stats.json", help="Vision stats output.")
     p.add_argument("--data-file", default="match_data.json", help="Dashboard events.")
     p.add_argument("--interval", type=float, default=10.0,
-                   help="Seconds between checkpoints.")
+                   help="Seconds between dashboard bridge checkpoints (cheap).")
+    p.add_argument("--full-interval", type=float, default=60.0,
+                   help="Seconds between full match_stats.json saves. The "
+                        "per-frame tracking data is expensive to serialise and "
+                        "the save stalls capture, so it runs less often than "
+                        "--interval. A final full save always happens on exit.")
     p.add_argument("--snapshot", default="recordings/live_eye.jpg",
                    help="Write the latest annotated frame here each step "
                         "(set to '' to disable). The Live Eye page displays it.")
@@ -186,12 +206,44 @@ def main(argv=None) -> int:
 
     processed = 0
     ball_seen = 0
-    started = time.time()
+    run_started = time.time()
+    started = run_started
     last_ckpt = started
+    last_full = started      # full document saves are on a slower cadence
     last_status = 0.0        # status is published far more often than checkpoints
     frames_at_baseline = 0   # frame count when the fps window last reset
+    paused_seconds = 0.0
+    paused_at = None
     paused = False
     was_paused = False
+
+    def run_quality(now=None):
+        """How this run is going — the raw material for the trust verdict.
+
+        Saved into match_stats.json so a report generated days later can still
+        say whether these numbers were measured or merely indicative. See
+        quality.py for the thresholds applied to it.
+        """
+        now = now or time.time()
+        wall = max(1e-6, now - run_started - paused_seconds)
+        return {
+            "frames_processed": processed,
+            "ball_detection_rate": (ball_seen / processed) if processed else 0.0,
+            "fps": processed / wall,
+            "reconnects": getattr(analyzer, "reconnect_count", 0),
+            "duration_seconds": round(now - run_started, 1),
+            "paused_seconds": round(paused_seconds, 1),
+            "calibrated": analyzer.homography is not None,
+            "coordinate_space": ("pitch" if analyzer.homography is not None
+                                 else "image"),
+            "model": args.model,
+            "device": args.device,
+            "stride": args.stride,
+            "imgsz": args.imgsz,
+            "source": str(source),
+            "source_width": getattr(analyzer, "_frame_w", 0),
+            "source_height": getattr(analyzer, "_frame_h", 0),
+        }
 
     def publish_status(now, record=None):
         """Publish runner health. Cheap enough to call every second.
@@ -225,8 +277,11 @@ def main(argv=None) -> int:
             if os.path.exists(args.pause_flag):
                 if not paused:
                     paused = True
+                    paused_at = time.time()
                     _release_capture()
-                    checkpoint(analyzer, args)
+                    # A pause is a natural save point: half-time is exactly when
+                    # you might close the laptop.
+                    checkpoint(analyzer, args, run_quality(), full=True)
                     print("[live] paused (half-time) — capture released, "
                           "stats preserved.", flush=True)
                 # Keep publishing status so the app shows "paused", not "stale".
@@ -237,6 +292,10 @@ def main(argv=None) -> int:
             if paused:
                 paused = False
                 was_paused = True
+                if paused_at is not None:
+                    # Idle time must not count against the run's fps figure.
+                    paused_seconds += time.time() - paused_at
+                    paused_at = None
                 _reopen_capture()
                 print("[live] resumed — re-opened from the live edge.", flush=True)
 
@@ -266,17 +325,24 @@ def main(argv=None) -> int:
                 publish_status(now, record)
                 last_status = now
             if now - last_ckpt >= args.interval:
-                n = checkpoint(analyzer, args)
+                full = (now - last_full) >= args.full_interval
+                n = checkpoint(analyzer, args, run_quality(now), full=full)
+                if full:
+                    last_full = now
                 poss = analyzer.engine.possession_summary()
                 print(f"[live] {record.timestamp}  frames={processed}  "
                       f"passes={len(analyzer.engine.events)}  bridged={n}  "
                       f"poss H{poss.team_home_percentage:.0f}/"
-                      f"A{poss.team_away_percentage:.0f}", flush=True)
+                      f"A{poss.team_away_percentage:.0f}"
+                      f"{'  [saved]' if full else ''}", flush=True)
                 last_ckpt = now
     finally:
-        n = checkpoint(analyzer, args)
+        # The final save always writes the whole document, whatever the cadence.
+        n = checkpoint(analyzer, args, run_quality(), full=True)
         try:
-            analyzer.close()
+            # save=False: close() writes a document without our run_quality
+            # block, which would silently clobber the checkpoint just written.
+            analyzer.close(save=False)
         except Exception:
             pass
         if pid_path.exists():

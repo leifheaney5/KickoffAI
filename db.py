@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import (BigInteger, Date, DateTime, ForeignKey, Integer,
+from sqlalchemy import (BigInteger, Date, DateTime, Float, ForeignKey, Integer,
                         String, Text, Uuid, create_engine)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, mapped_column,
                             relationship, sessionmaker)
@@ -64,6 +64,19 @@ class Match(Base):
     home_score: Mapped[int] = mapped_column(Integer, default=0)
     away_score: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str] = mapped_column(Text, default="")
+
+    # --- Camera analysis summary ----------------------------------------- #
+    # A flattened digest of the match's match_stats.json. The full document is
+    # archived as a media file, but season-level trends need these queryable
+    # without opening a multi-megabyte JSON per match. `vision_verdict` is the
+    # trust gate (see quality.py) and is what keeps low-confidence runs out of
+    # season aggregates; "" means no camera run.
+    vision_verdict: Mapped[str] = mapped_column(String(16), default="")
+    vision_ball_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    vision_home_possession: Mapped[float] = mapped_column(Float, default=0.0)
+    vision_away_possession: Mapped[float] = mapped_column(Float, default=0.0)
+    vision_passes: Mapped[int] = mapped_column(Integer, default=0)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                  default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
@@ -98,6 +111,11 @@ class Event(Base):
     result: Mapped[Optional[str]] = mapped_column(String(40))
     location: Mapped[Optional[str]] = mapped_column(String(120))
     raw_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Which ingest produced this event: "audio" (the mic) or "vision" (the Eye).
+    # Without it an archived match cannot tell the two apart, which makes any
+    # cross-match comparison of vision quality impossible. Events mirrored before
+    # this column existed all came from the mic, hence the 'audio' default.
+    source: Mapped[str] = mapped_column(String(16), default="audio")
 
     match: Mapped["Match"] = relationship(back_populates="events")
 
@@ -149,6 +167,16 @@ def get_engine():
 # framework. (table, column, SQL type, default literal)
 _ADDED_COLUMNS = [
     ("matches", "competition", "VARCHAR(200)", "''"),
+    # Backfills to 'audio': every event mirrored before this column existed was
+    # logged by the mic, since vision events were never distinguishable.
+    ("events", "source", "VARCHAR(16)", "'audio'"),
+    # Camera-analysis digest; "" / 0 means no camera run was recorded, which is
+    # correct for every match archived before the Eye existed.
+    ("matches", "vision_verdict", "VARCHAR(16)", "''"),
+    ("matches", "vision_ball_rate", "FLOAT", "0"),
+    ("matches", "vision_home_possession", "FLOAT", "0"),
+    ("matches", "vision_away_possession", "FLOAT", "0"),
+    ("matches", "vision_passes", "INTEGER", "0"),
 ]
 
 

@@ -156,19 +156,37 @@ class MatchStats:
     # "pitch" once a homography maps coordinates to true pitch metres, else
     # "image" (raw camera space — perspective-distorted, depth compressed).
     coordinate_space: str = "image"
+    # How the run went: frames, ball-detection rate, fps, reconnects, ... Written
+    # by the live runner and read by quality.py to decide whether these numbers
+    # are trustworthy enough to present as measured. Empty for older documents.
+    run_quality: dict = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
-        return {
-            "tracking_data": {
-                "frame_rate_sampled": self.frame_rate_sampled,
-                "coordinate_space": self.coordinate_space,
-                "spatial_tracking_frames": [f.to_dict() for f in self.frames],
-            },
+    def stats_dict(self) -> dict:
+        """The cheap half of the document: passes, possession, run quality.
+
+        Serialising `spatial_tracking_frames` dominates the cost of a save (at
+        the live runner's 4000-frame bound it is ~9.5 MB and ~250 ms), and the
+        dashboard bridge only ever reads `statistical_events`. Callers that do
+        not need per-frame positions should use this instead of `to_dict`.
+        """
+        doc = {
             "statistical_events": {
                 "passing_stats": [p.to_dict() for p in self.passes],
                 "possession_summary": self.possession.to_dict(),
             },
         }
+        if self.run_quality:
+            doc["run_quality"] = dict(self.run_quality)
+        return doc
+
+    def to_dict(self) -> dict:
+        doc = self.stats_dict()
+        doc["tracking_data"] = {
+            "frame_rate_sampled": self.frame_rate_sampled,
+            "coordinate_space": self.coordinate_space,
+            "spatial_tracking_frames": [f.to_dict() for f in self.frames],
+        }
+        return doc
 
     def save(self, path: str) -> None:
         """Atomically write the document to ``path`` (rename is atomic)."""

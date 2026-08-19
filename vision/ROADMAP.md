@@ -43,7 +43,8 @@ video ─▶ detection (Ultralytics YOLO  OR  Roboflow cloud) ─▶ tracking (B
       ─▶ identity permanence ─▶ homography (static 4-pt OR per-frame pitch keypoints)
       ─▶ teams (HSV K-Means) + jersey OCR ─▶ heuristics (possession/passing)
       ─▶ match_stats.json ──▶ bridge ──▶ match_data.json (live dashboard/timeline)
-      └─▶ pages/4_Video_Analysis.py  (live camera + tactical map + stats)
+      └─▶ scripts/live_vision.py     (the Eye: persistent live runner)
+      └─▶ pages/Film_Room.py         (recorded files + tactical map + stats)
 ```
 
 ## Phased roadmap
@@ -51,7 +52,7 @@ video ─▶ detection (Ultralytics YOLO  OR  Roboflow cloud) ─▶ tracking (B
 ### Phase 1 — Spatial analytics that work today · M · no blockers
 - `vision/analytics.py` — heatmaps, average positions, team shape (centroid,
   width/depth, compactness), territory. Pure, offline.
-- `pages/5_Team_Shape.py` — heatmaps (team & per-player), formation diagram,
+- `pages/Team_Shape.py` — heatmaps (team & per-player), formation diagram,
   shape metrics, territory bars.
 - Image-space now; auto-upgrades to pitch-accurate after Phase 2.
 

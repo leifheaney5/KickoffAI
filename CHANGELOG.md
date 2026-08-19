@@ -23,6 +23,73 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.13.0] - 2026-08-19
+
+Vision/audio fusion behind an honest trust gate. The Eye's numbers now reach the
+report, the momentum curve, the library and season analytics — but every run is
+graded first, so a low-confidence run is labelled rather than believed. Plan:
+`E2E_DEVELOPMENT_PLAN.md` (phases A, B, E, F).
+
+### Added
+
+- **`quality.py` — the trust gate.** Grades every camera run **measured /
+  indicative / unusable** from its ball-detection rate, frame count, reconnects
+  and calibration, and explains the grade in plain language. Thresholds live in
+  one place so the retrain can retune every consumer at once. Pure functions, no
+  vision deps, so it runs in CI.
+- **`run_quality` block in `match_stats.json`.** The runner records frames, ball
+  rate, fps, reconnects, paused time, calibration, model, device and source
+  resolution. A report generated days later can still say how the run went;
+  previously those figures were visible live and then lost.
+- **Camera Analysis section in the report** (PDF + text): the run's reliability
+  grade, the reasons behind it, and camera possession shown **beside** the
+  play-by-play figures — never blended into them. When the two disagree by 15
+  points or more the report says so and explains why the methods differ.
+- **Vision in the momentum curve**, weighted by run quality (`measured` 1.0,
+  `indicative` 0.4, `unusable` 0.0), so a poor run nudges the line instead of
+  driving it. The Insights page shows the grade and the weight in force.
+- **Fused key moments.** `insights.vision_pressure()` finds passages where the
+  camera saw one side stringing passes together, and `key_moments()` now tags
+  each moment `audio` / `momentum` / `vision` plus `confirmed` — true when a
+  *different* ingest independently flagged the same team nearby. Agreement
+  between the ear and the eye is the one signal neither stream can produce alone.
+- **Season camera analytics.** `season.possession_trend()` and
+  `season.vision_coverage()`, surfaced on the Season page. Only **measured** runs
+  enter the trend: an indicative run is fine on its own match report, but its
+  error is systematic, so averaging it into a season line corrupts the line.
+- **Camera digest on the match row.** `matches` gained `vision_verdict`,
+  `vision_ball_rate`, `vision_home_possession`, `vision_away_possession` and
+  `vision_passes`, so season trends query the DB instead of opening a
+  multi-megabyte JSON per match. Applied idempotently to existing databases.
+
+### Changed
+
+- **Checkpoint cadence split.** Serialising the per-frame tracking data measured
+  **9.5 MB and ~247 ms** at the runner's 4000-frame bound — a stall on the
+  capture loop that dropped frames every 10 seconds, ~5.0 GB of writes and 2.5%
+  of wall clock over a 90-minute match. The cheap dashboard bridge stays on the
+  10s cadence; the full document is written every 60s (`--full-interval`), at
+  half-time, and always on exit. `MatchStats.stats_dict()` builds just the cheap
+  half for callers that never needed the frames.
+- **`events.source` is preserved into the library.** `vision/bridge.py` has
+  always tagged camera events, but `finalize.py` dropped the field when mirroring
+  to Postgres, so an archived match could not tell the Eye from the mic — which
+  made cross-match vision analysis impossible. Existing rows backfill to `audio`.
+- `vision/NEXT_STEPS.md` and `vision/ROADMAP.md` corrected: 4-point pitch
+  calibration is built (it shipped in v1.12.0 and lives on Camera & Feed), the
+  hardcoded-CPU note is obsolete, and the page names match reality.
+
+### Fixed
+
+- **`analyzer.close()` silently overwrote the runner's final checkpoint.** It
+  re-saved a document without the `run_quality` block over the one the runner had
+  just written, so run quality never survived a session. `close(save=False)` lets
+  a caller that maintains a richer document write it itself.
+- The momentum renderer now logs when it falls back from matplotlib to Pillow,
+  so a report whose chart looks unfamiliar is explainable.
+- `quality.assess()` no longer reports "uncalibrated camera" when no camera run
+  happened at all.
+
 ## [1.12.1] - 2026-08-17
 
 ### Fixed

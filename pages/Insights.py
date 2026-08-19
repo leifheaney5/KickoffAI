@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import brand            # noqa: E402
 import control          # noqa: E402
 import insights as IN   # noqa: E402
+import quality as Q     # noqa: E402
+import report as R      # noqa: E402
 import stats as S       # noqa: E402
 import ui_helpers as UI  # noqa: E402
 
@@ -88,10 +90,16 @@ if not events:
             "for momentum and AI analysis.")
     st.stop()
 
+# Camera events feed the momentum curve too, but only as heavily as the run
+# deserves — a poor vision run should nudge the line, not drive it. Resolved
+# once here so every figure on the page uses the same weighting.
+vision = R.load_vision()
+vision_weight = Q.momentum_weight(vision.get("quality")) if vision else 0.0
+
 # --------------------------------------------------------------------------- #
 # Headline numbers
 # --------------------------------------------------------------------------- #
-m = IN.headline_metrics(events, home, away)
+m = IN.headline_metrics(events, home, away, vision_weight=vision_weight)
 lead = m["momentum_leader"] or "Even"
 lead_color = HOME if lead == "Home" else AWAY if lead == "Away" else "#9fb6dd"
 
@@ -118,7 +126,21 @@ st.write("")
 # --------------------------------------------------------------------------- #
 st.markdown(brand.section("Momentum — the swing of the match"),
             unsafe_allow_html=True)
-rows = IN.momentum_series(events)
+
+if vision:
+    q = vision.get("quality") or {}
+    vcols = st.columns([1, 3])
+    vcols[0].metric("Camera reliability", q.get("label", "Unusable"))
+    with vcols[1]:
+        st.caption(Q.summary_line(q))
+        if vision_weight and vision_weight < 1.0:
+            st.caption(f"Camera events count at {vision_weight:.0%} weight in "
+                       "the curve below, so a low-confidence run cannot "
+                       "dominate it.")
+        elif not vision_weight:
+            st.caption("Camera events are excluded from the curve below.")
+
+rows = IN.momentum_series(events, vision_weight=vision_weight)
 if any(r["momentum"] for r in rows):
     df = pd.DataFrame(rows)
     base = alt.Chart(df).encode(

@@ -38,6 +38,11 @@ def load_season():
                 "played_on": m.played_on, "home_team": m.home_team,
                 "away_team": m.away_team, "home_score": m.home_score,
                 "away_score": m.away_score,
+                "vision_verdict": m.vision_verdict or "",
+                "vision_ball_rate": m.vision_ball_rate or 0.0,
+                "vision_home_possession": m.vision_home_possession or 0.0,
+                "vision_away_possession": m.vision_away_possession or 0.0,
+                "vision_passes": m.vision_passes or 0,
             })
             timeline.append({
                 "match": m.name,
@@ -102,3 +107,39 @@ if not tdf.empty and tdf["goals"].sum() > 0:
     st.bar_chart(tdf.set_index("match")["goals"], height=260)
 else:
     st.caption("Not enough data to chart yet.")
+
+st.write("")
+
+# --------------------------------------------------------------------------- #
+# Camera coverage + possession trend
+#
+# Only *measured* runs are trended. An indicative run is worth showing on its own
+# match report, but averaging it into a season line silently corrupts the line —
+# a run that rarely saw the ball misattributes possession rather than just adding
+# noise. Coverage is stated first so the trend always has an honest denominator.
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Camera coverage"), unsafe_allow_html=True)
+cov = season.vision_coverage(matches)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Matches with camera", f"{cov['measured'] + cov['indicative']}/{cov['matches']}")
+c2.metric("Measured", cov["measured"])
+c3.metric("Indicative", cov["indicative"])
+c4.metric("Mean ball rate", f"{cov['mean_ball_rate'] * 100:.0f}%"
+          if cov["measured"] else "—")
+
+if not cov["measured"]:
+    st.caption("No match yet has a camera run good enough to trend. Runs graded "
+               "*indicative* still appear on their own match report — they are "
+               "held out of season trends so a low-confidence run cannot skew "
+               "them.")
+else:
+    trend = season.possession_trend(matches)
+    if trend:
+        tf = pd.DataFrame(trend)
+        tf["match"] = tf["home_team"] + " v " + tf["away_team"]
+        st.markdown(brand.section("Possession trend (measured runs only)"),
+                    unsafe_allow_html=True)
+        st.line_chart(tf.set_index("match")[["home_possession",
+                                             "away_possession"]], height=260)
+        st.caption(f"{len(trend)} of {cov['matches']} matches have a measured "
+                   "camera run.")

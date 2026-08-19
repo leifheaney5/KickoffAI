@@ -62,6 +62,67 @@ def team_standings(matches: list) -> list:
     return rows
 
 
+def possession_trend(matches: list, team: str = None) -> list:
+    """Camera-measured possession per match, oldest first.
+
+    Only **measured** runs are included. A run the trust gate graded indicative
+    is real signal for a single match — the report shows it, labelled — but
+    averaging it into a season trend silently corrupts the trend, because the
+    error is not random: a run that rarely saw the ball misattributes possession
+    rather than merely adding noise.
+
+    `matches`: dicts with played_on, home_team, away_team, vision_verdict,
+    vision_home_possession, vision_away_possession. Pass `team` to get that
+    side's own share regardless of whether it played home or away.
+    Returns [{played_on, opponent, possession, home}].
+    """
+    rows = []
+    for m in matches:
+        if (m.get("vision_verdict") or "") != "measured":
+            continue
+        home = (m.get("home_team") or "").strip()
+        away = (m.get("away_team") or "").strip()
+        hp = float(m.get("vision_home_possession") or 0.0)
+        ap = float(m.get("vision_away_possession") or 0.0)
+        if not (hp or ap):
+            continue
+        if team is None:
+            rows.append({"played_on": m.get("played_on"), "home_team": home,
+                         "away_team": away, "home_possession": round(hp, 1),
+                         "away_possession": round(ap, 1)})
+        elif team == home:
+            rows.append({"played_on": m.get("played_on"), "opponent": away,
+                         "possession": round(hp, 1), "home": True})
+        elif team == away:
+            rows.append({"played_on": m.get("played_on"), "opponent": home,
+                         "possession": round(ap, 1), "home": False})
+    rows.sort(key=lambda r: (r.get("played_on") is None, r.get("played_on")))
+    return rows
+
+
+def vision_coverage(matches: list) -> dict:
+    """How much of the season the camera actually covered, and how well.
+
+    Season figures are only as good as the runs behind them, so this is the
+    honest denominator: how many matches have a measured camera run at all.
+    """
+    counts = Counter((m.get("vision_verdict") or "none") for m in matches)
+    total = len(matches)
+    measured = counts.get("measured", 0)
+    return {
+        "matches": total,
+        "measured": measured,
+        "indicative": counts.get("indicative", 0),
+        "unusable": counts.get("unusable", 0),
+        "none": counts.get("none", 0),
+        "measured_pct": round(100 * measured / total) if total else 0,
+        "mean_ball_rate": round(
+            sum(float(m.get("vision_ball_rate") or 0.0) for m in matches
+                if (m.get("vision_verdict") or "") == "measured")
+            / measured, 3) if measured else 0.0,
+    }
+
+
 def top_scorers(goal_rows: list) -> list:
     """Tally goals per (player, team) from goal events.
 

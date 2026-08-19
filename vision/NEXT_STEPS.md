@@ -10,9 +10,11 @@ priority order, with commands. Start by reading this, then `LOCAL_MODEL_SETUP.md
   clip: ~19% ball, referees in ~80% of frames, ~4 players/frame — matches the
   Roboflow *cloud* model, but local.
 - **GPU training works** (RTX 3080, torch `+cu126`).
-- **Live UI**: *Video Analysis* (camera + tactical map + live stats) and
-  *Team Shape* (heatmaps, formation, territory) + a local AI analyst that
-  answers positioning questions from the computed findings.
+- **Live UI**: the Eye runs as a persistent process (`scripts/live_vision.py`),
+  started and stopped from the **Match Console**; **Live Eye** shows the frame
+  full-size, **Film Room** analyses recorded files, and **Team Shape** gives
+  heatmaps / formation / territory, plus a local AI analyst that answers
+  positioning questions from the computed findings.
 - **Everything is in the repo** (code, model, dataset, annotation frames).
 
 ## Known limitations (why the work below matters)
@@ -41,25 +43,28 @@ shipped model never saw your footage.
 - Deploy: copy the new `best.pt` over `soccer_yolov8m_v1.pt` (or pass `--model`).
 - Full guide: `ANNOTATION.md`.
 
-### 2. Pitch calibration — makes the geometry real (blocked on fixed-camera footage)
+### 2. Pitch calibration — BUILT (v1.12.0); needs fixed-camera footage to use
 
-Today's heatmaps are image-space. A **fixed (non-panning) camera** + 4 known
-pitch points = a correct homography → true pitch positions/distances and the
-door to possession.
+Manual 4-point calibration now lives on the **Camera & Feed** page: grab a frame
+from the configured feed, mark four known landmarks, save. The homography
+persists and every later run projects through it.
 
-- Needs a **not-yet-built** manual 4-point calibration step (the auto pitch
-  model fails on football-field markings — confirmed: 0 keypoints/frame).
-- When you have a fixed-panorama export, ask Claude: *"build a manual 4-point
-  pitch calibration in the Video Analysis page and feed it as the homography."*
-  The plumbing exists — `PitchHomography.from_correspondences()` already takes
-  4+ point pairs; the pipeline accepts a `homography=` / `pitch_detector=`.
+- Still needs a **fixed (non-panning) camera** export to be worth doing — an
+  auto-following Veo camera invalidates a static homography.
+- Until a run is calibrated, positions stay image-space; `quality.py` says so
+  explicitly in the report rather than leaving it implied.
 
 ### 3. Validate possession & passing on real footage
 
-Never confirmed on real video (ball was too sparse). After #1 (better ball) and
-#2 (calibration), run the pipeline and check `match_stats.json` for non-empty
-`passing_stats` + a real possession split, then bridge into the dashboard:
-`python -m vision.bridge --stats match_stats.json --out match_data.json`.
+Never confirmed on real video (ball was too sparse). After task 1 (better ball)
+and task 2 (calibration), run the pipeline and check `match_stats.json` for
+non-empty `passing_stats` + a real possession split, then bridge into the
+dashboard: `python -m vision.bridge --stats match_stats.json --out match_data.json`.
+
+Since v1.13.0 you no longer have to eyeball this: every run writes a
+`run_quality` block and `quality.py` grades it **measured / indicative /
+unusable**. The report states the grade, and only *measured* runs feed season
+trends. Task 1 is what moves runs from indicative to measured.
 
 ### 4. Turn on jersey-number identity (after #1 adds the class)
 
@@ -69,8 +74,6 @@ become reliable — no more 75-track fragmentation.
 
 ## Minor / polish
 
-- **Video Analysis page runs inference on CPU** (hardcoded `device="cpu"`). On a
-  CUDA machine, add a device selector or set `device="0"` for a big speedup.
 - **Ollama** must be running for the analyst Q&A: `ollama serve` +
   `ollama pull llama3.2`.
 - The current annotation frames are **720p** — re-extract at 1080p (task #1).
