@@ -11,10 +11,10 @@ import streamlit as st
 
 import auth
 import brand
+import ui_helpers as UI
 import db
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("CLUB", "Account"), unsafe_allow_html=True)
+UI.page_setup("CLUB", "Account")
 
 enabled = auth.auth_enabled()
 me = auth.current_user()
@@ -116,6 +116,16 @@ else:
     s1.metric("Server", "Reachable" if sy["reachable"] else "Offline")
     s2.metric("Waiting to sync", sy["pending"])
     s3.caption(f"`{sy['server']}`")
+    if not sync.SHARED_LIBRARY_ROOT:
+        st.caption("Reports, stats and images are **not** being shared — set "
+                   "`KICKOFF_SHARED_LIBRARY_ROOT` to a path both machines can "
+                   "reach. Without it the club library gets the numbers but "
+                   "none of the documents.")
+    else:
+        extra = ("Videos included." if sync.SYNC_LARGE_MEDIA
+                 else "Videos stay local (set `KICKOFF_SYNC_VIDEO=1` to include "
+                      "them).")
+        st.caption(f"Artifacts sync to `{sync.SHARED_LIBRARY_ROOT}`. {extra}")
     if not sy["reachable"]:
         st.info(f"{sy['detail']} Matches stay safely on this machine and will "
                 "push when the server is reachable — nothing is lost.")
@@ -132,6 +142,14 @@ else:
             res = sync.push()
         if res.get("ok"):
             st.success(f"Pushed {res['pushed']} match(es).")
+            copied = sum((r.get("media") or {}).get("copied", 0)
+                         for r in res["results"])
+            st.caption(f"{copied} artifact(s) copied to the club library.")
+            # Say why anything stayed behind, rather than leaving a coach to
+            # wonder where their video went.
+            for r in res["results"]:
+                for why in (r.get("media") or {}).get("reasons", [])[:3]:
+                    st.caption(f"· {r['slug']}: {why}")
             failed = [r for r in res["results"] if r["action"] == "failed"]
             for f in failed:
                 st.error(f"{f['slug']}: {f.get('error', 'failed')}")

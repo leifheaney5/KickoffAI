@@ -17,10 +17,10 @@ import streamlit as st
 
 import brand
 import control
+import ui_helpers as UI
 import vision_runner
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("SET UP", "Camera & Feed"), unsafe_allow_html=True)
+UI.page_setup("SET UP", "Camera & Feed")
 
 # Heavy vision deps are optional; the page still configures a feed without them,
 # it just cannot grab a test frame or calibrate.
@@ -265,11 +265,17 @@ elif VISION_OK:
             st.session_state[CAL_KEY + "_clicks"] = []
             st.session_state.pop(CAL_KEY + "_last", None)
             st.rerun()
-    if gc2.button("Clear saved calibration", width="stretch",
-                  disabled=not saved_cal):
-        vcal.clear_calibration()
-        st.toast("Calibration cleared.")
-        st.rerun()
+    with gc2:
+        if UI.confirm_action(
+                "Clear saved calibration", key="clear_calibration",
+                disabled=not saved_cal,
+                warning="Discard the saved pitch calibration? You would need to "
+                        "grab a frame and mark all four landmarks again, and "
+                        "until then positions stay in image space.",
+                confirm_label="Clear it"):
+            vcal.clear_calibration()
+            st.toast("Calibration cleared.")
+            st.rerun()
 
     frame = st.session_state.get(CAL_KEY + "_frame")
     if frame is not None:

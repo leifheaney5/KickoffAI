@@ -366,3 +366,118 @@ def test_redacted_url_hides_the_password(club, monkeypatch):
 
     assert "s3cret" not in shown
     assert "club.local" in shown
+
+
+# --------------------------------------------------------------------------- #
+# Media sync (the artifacts, not just the numbers)
+# --------------------------------------------------------------------------- #
+def _match_with_media(db, library, tmp_path, capture_id="cap-m"):
+    src = tmp_path / "src"
+    src.mkdir(exist_ok=True)
+    (src / "report.pdf").write_bytes(b"PDF" * 1000)
+    (src / "match.mp4").write_bytes(b"\0" * (2 * 1024 * 1024))
+    db.init_db()
+    with db.session() as s:
+        m = library.create_match(s, "Eagles vs Hawks", None, "Eagles", "Hawks",
+                                 1, 0, "")
+        m.capture_id = capture_id
+        s.flush()
+        library.register_file(s, m, "report_pdf", str(src / "report.pdf"), "Report")
+        library.register_file(s, m, "video", str(src / "match.mp4"), "Video")
+
+
+def test_reports_sync_but_video_stays_local_by_default(club, monkeypatch, tmp_path):
+    """The club library must have the documents; wifi must not carry the video."""
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", str(tmp_path / "club_lib"))
+
+    res = sync.push()
+
+    media = res["results"][0]["media"]
+    assert media["copied"] == 1
+    assert any("video" in r for r in media["reasons"])
+    on_server = [f for _r, _d, fs in os.walk(tmp_path / "club_lib") for f in fs]
+    assert "report.pdf" in on_server
+    assert "match.mp4" not in on_server
+
+
+def test_video_syncs_when_explicitly_enabled(club, monkeypatch, tmp_path):
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", str(tmp_path / "club_lib"))
+    monkeypatch.setattr(sync, "SYNC_LARGE_MEDIA", True)
+
+    sync.push()
+
+    on_server = [f for _r, _d, fs in os.walk(tmp_path / "club_lib") for f in fs]
+    assert "match.mp4" in on_server
+
+
+def test_oversized_files_are_skipped_with_a_reason(club, monkeypatch, tmp_path):
+    """One huge upload must not stall a sync that would otherwise succeed."""
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", str(tmp_path / "club_lib"))
+    monkeypatch.setattr(sync, "SYNC_LARGE_MEDIA", True)
+    monkeypatch.setattr(sync, "MEDIA_MAX_MB", 1.0)      # the video is 2 MB
+
+    res = sync.push()
+
+    media = res["results"][0]["media"]
+    assert media["copied"] == 1                          # the report still went
+    assert any("over the" in r for r in media["reasons"])
+
+
+def test_pushing_media_twice_does_not_duplicate_rows(club, monkeypatch, tmp_path):
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", str(tmp_path / "club_lib"))
+    sync.push()
+
+    with db.session() as s:                              # force a retry
+        for m in s.query(db.Match).all():
+            m.sync_state = "local"
+    sync.push()
+
+    Session, _ = sync._shared_sessionmaker()
+    remote = Session()
+    assert remote.query(db.MediaFile).count() == 1
+    remote.close()
+
+
+def test_media_failure_does_not_lose_the_match(club, monkeypatch, tmp_path):
+    """The match row is committed first; a broken copy must not undo it."""
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", str(tmp_path / "club_lib"))
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(sync, "_copy_media", boom)
+
+    res = sync.push()
+
+    assert res["pushed"] == 1                            # match still landed
+    Session, _ = sync._shared_sessionmaker()
+    remote = Session()
+    assert remote.query(db.Match).count() == 1
+    remote.close()
+    assert sync.pending_matches() == []                  # and is marked synced
+
+
+def test_media_sync_is_off_without_a_shared_root(club, monkeypatch, tmp_path):
+    db, library, _, sync, _ = club
+    _match_with_media(db, library, tmp_path)
+    monkeypatch.setattr(sync, "SHARED_DB_URL", f"sqlite:///{tmp_path}/club.db")
+    monkeypatch.setattr(sync, "SHARED_LIBRARY_ROOT", "")
+
+    res = sync.push()
+
+    assert res["pushed"] == 1
+    assert res["results"][0]["media"]["copied"] == 0

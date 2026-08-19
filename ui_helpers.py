@@ -78,6 +78,39 @@ def page_setup(kicker: str = "", title: str = "", caption: str = "",
         st.caption(caption)
 
 
+def confirm_action(label: str, key: str, warning: str, confirm_label: str = None,
+                   container=None, disabled: bool = False,
+                   width: str = "stretch") -> bool:
+    """A two-step button for something that cannot be undone.
+
+    Returns True on the confirming click, so callers read as a plain button.
+
+    Applied by *consequence*, not uniformly. `Undo last event` is trivially
+    redone and stays one click; resetting a live match clock, deleting gigabytes
+    of recordings, or discarding a pitch calibration are not, and each used to be
+    a single unguarded click.
+    """
+    c = container or st
+    armed_key = f"__confirm_{key}"
+
+    if not st.session_state.get(armed_key):
+        if c.button(label, width=width, disabled=disabled, key=f"{key}_arm"):
+            st.session_state[armed_key] = True
+            st.rerun()
+        return False
+
+    c.warning(warning)
+    yes, no = c.columns(2)
+    if yes.button(confirm_label or "Yes, continue", type="primary",
+                  width=width, key=f"{key}_yes"):
+        st.session_state.pop(armed_key, None)
+        return True
+    if no.button("Cancel", width=width, key=f"{key}_no"):
+        st.session_state.pop(armed_key, None)
+        st.rerun()
+    return False
+
+
 def eye_svg(active: bool) -> str:
     """The Eye's counterpart to mic_svg — same size, weight and glow language."""
     color = "#34d399" if active else "#5b6e92"

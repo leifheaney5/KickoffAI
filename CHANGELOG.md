@@ -23,6 +23,45 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.16.0] - 2026-08-19
+
+Artifacts reach the club library, destructive actions ask first, and the flows
+themselves are tested. Plan: `UX_ARCHITECTURE_PLAN.md` (A3, B1 completion, D1, D3).
+
+### Added
+
+- **Media sync (D1).** `sync.py` pushed matches and events but not the *files*,
+  so a club library held every number and none of the documents — nobody would
+  notice until the first coach tried to open a colleague's report. Artifacts now
+  copy to `KICKOFF_SHARED_LIBRARY_ROOT` (the same relative paths work on both
+  sides, so nothing is rewritten). Reports, stats and CSVs always travel; video,
+  images and voice notes stay local unless `KICKOFF_SYNC_VIDEO=1`, and any single
+  file over `KICKOFF_SYNC_MEDIA_MAX_MB` is skipped so one huge upload cannot
+  stall an otherwise good sync. Media copies **after** the match row commits and
+  never rolls it back — club wifi will interrupt a 2 GB video, and losing the
+  match record over that would be absurd. Skips are reported with their reason
+  rather than silently dropped.
+- **`ui_helpers.confirm_action()` (A3)** — a two-step guard applied by
+  consequence. Resetting a running match clock, deleting gigabytes of
+  recordings, and discarding a pitch calibration were each a single unguarded
+  click; all three now say what will be lost. `Undo last event` is trivially
+  redone and deliberately stays one click.
+- **`tests/test_flows.py` (D3)** — seven end-to-end flows across module
+  boundaries: first run to readiness, match → archive → next match, capture →
+  sync → another user's view, an interrupted sync resuming, and a camera run
+  reaching the report, library and season. Page tests only assert "renders";
+  the UUID bug that broke archiving for every club install passed every unit
+  test and only fell out of a full flow.
+
+### Changed
+
+- **All 15 pages now really do open the same way.** v1.15.0 migrated the seven
+  legacy pages but left the other eight calling `brand.app_css()` and
+  `brand.page_header()` by hand — the split it set out to remove was still half
+  present. Every page now calls `UI.page_setup()` and nothing else.
+- The match-clock Reset is guarded only when a clock exists to lose, so a stray
+  click before kickoff still costs nothing.
+
 ## [1.15.0] - 2026-08-19
 
 First-run guidance, a visible match lifecycle, and one page convention. Plan:

@@ -19,8 +19,7 @@ import share_image
 import stats as S
 import ui_helpers as UI
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("AFTER MATCH", "Post-Match"), unsafe_allow_html=True)
+UI.page_setup("AFTER MATCH", "Post-Match")
 
 events = S.load_events()
 state = control.load_control()

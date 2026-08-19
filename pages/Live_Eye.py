@@ -18,8 +18,7 @@ import control
 import ui_helpers as UI
 import vision_runner
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("LIVE EYE", "Vision runner"), unsafe_allow_html=True)
+UI.page_setup("LIVE EYE", "Vision runner")
 
 state = control.load_control()
 

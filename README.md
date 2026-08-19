@@ -241,6 +241,9 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 | `KICKOFF_RECORDINGS_KEEP_DAYS` | `30` | Delete recordings older than this (0 = never) |
 | `KICKOFF_RECORDINGS_MAX_GB` | `20` | Cap the recordings directory, oldest first (0 = no cap) |
 | `KICKOFF_SHARED_DB_URL` | unset | Club server Postgres; unset = local library only |
+| `KICKOFF_SHARED_LIBRARY_ROOT` | unset | Where club artifacts (reports, stats) are copied |
+| `KICKOFF_SYNC_VIDEO` | `0` | Include match video in a club sync (large) |
+| `KICKOFF_SYNC_MEDIA_MAX_MB` | `512` | Skip any single artifact larger than this |
 | `KICKOFF_SESSION_FILE` | `~/.kickoff_session.json` | Where this machine remembers a sign-in |
 | `KICKOFF_PG_PASSWORD` | `kickoff` | Postgres password — **must** be set if you bind beyond localhost |
 | `KICKOFF_PG_BIND` | `127.0.0.1` | Postgres bind address; `0.0.0.0` serves a club LAN |

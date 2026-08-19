@@ -21,7 +21,7 @@ import stats as S
 import ui_helpers as UI
 import vision_runner
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
+UI.page_setup()
 
 events = S.load_events()
 state = control.load_control()
@@ -77,7 +77,20 @@ if ctl[2].button("⯀  Half", width="stretch"):
         vision_runner.pause()
     st.rerun()
 
-if ctl[3].button("↺  Reset", width="stretch"):
+# Reset is the one transport control that destroys something: the match clock
+# cannot be re-run. Guarded only when there is a clock worth losing, so a stray
+# click before kickoff still costs nothing.
+_elapsed = control.elapsed_seconds(state["timer"])
+if _elapsed > 0:
+    if UI.confirm_action(
+            "↺  Reset", key="reset_clock", container=ctl[3],
+            warning=f"Reset the match clock? It reads "
+                    f"{control.fmt_clock(_elapsed)} and cannot be recovered. "
+                    f"Events and notes are kept.",
+            confirm_label="Reset the clock"):
+        control.save_control(control.timer_reset(state))
+        st.rerun()
+elif ctl[3].button("↺  Reset", width="stretch"):
     control.save_control(control.timer_reset(state))
     st.rerun()
 

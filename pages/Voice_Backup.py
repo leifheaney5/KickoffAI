@@ -21,8 +21,7 @@ import control
 import screen_recorder
 import ui_helpers as UI
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("SET UP", "Voice Backup"), unsafe_allow_html=True)
+UI.page_setup("SET UP", "Voice Backup")
 
 state = control.load_control()
 
@@ -116,8 +115,13 @@ else:
                     f"{screen_recorder.MAX_GB:.0f} GB. "
                     f"{plan['count']} file(s) are over the limit "
                     f"({plan['freed_gb']:.1f} GB).")
-                if st.button(f"Delete {plan['count']} old recording(s)",
-                             width="stretch", key="prune_recordings"):
+                if UI.confirm_action(
+                        f"Delete {plan['count']} old recording(s)",
+                        key="prune_recordings",
+                        warning=f"Permanently delete {plan['count']} recording(s), "
+                                f"freeing {plan['freed_gb']:.1f} GB? The video "
+                                f"files cannot be recovered.",
+                        confirm_label="Delete them"):
                     done = screen_recorder.prune_recordings()
                     st.toast(f"Freed {done['freed_gb']:.1f} GB.")
                     st.rerun()

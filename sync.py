@@ -30,6 +30,27 @@ import db
 
 SHARED_DB_URL = os.environ.get("KICKOFF_SHARED_DB_URL", "")
 
+# Where the club's media lives — a mounted share, or a path on the server.
+# `MediaFile.path` is already relative to a library root, so the same relative
+# path works on both sides and nothing has to be rewritten.
+SHARED_LIBRARY_ROOT = os.environ.get("KICKOFF_SHARED_LIBRARY_ROOT", "")
+
+# Artifacts small enough to always be worth pushing: without them the club
+# library has every number and none of the documents, which is the state that
+# surprises the first coach who tries to open a colleague's report.
+MEDIA_ALWAYS = ("report_pdf", "report_txt", "events_csv", "team_csv",
+                "player_csv", "data_json", "timeline_png")
+
+# Big artifacts. Off by default — pushing every match video would saturate club
+# wifi, and the numbers are what people actually come for.
+MEDIA_OPTIONAL = ("video", "audio_note", "image")
+
+SYNC_MEDIA = os.environ.get("KICKOFF_SYNC_MEDIA", "1") not in ("0", "false", "no")
+SYNC_LARGE_MEDIA = os.environ.get("KICKOFF_SYNC_VIDEO", "0") in ("1", "true", "yes")
+# Skip any single file above this, whatever its kind, so one huge upload cannot
+# stall a sync that would otherwise succeed. 0 disables the cap.
+MEDIA_MAX_MB = float(os.environ.get("KICKOFF_SYNC_MEDIA_MAX_MB", "512"))
+
 # Columns copied verbatim when a match is pushed. Deliberately explicit: adding a
 # column to Match should be a conscious decision about whether it is shared.
 _MATCH_FIELDS = (
@@ -90,7 +111,10 @@ def pending_matches() -> list[dict]:
 
 
 def _copy_match(local_match, shared_session):
-    """Insert or update one match on the shared server. Returns 'created'|'updated'.
+    """Insert or update one match on the shared server.
+
+    Returns ``(action, remote_match)`` where action is 'created' or 'updated' —
+    the row is handed back so media can be attached to it afterwards.
 
     Matching is by `capture_id` — never by slug, which two coaches could easily
     generate identically for different fixtures on the same day.
@@ -132,7 +156,72 @@ def _copy_match(local_match, shared_session):
         shared_session.add(db.Event(
             match_id=remote.id,
             **{f: getattr(e, f) for f in _EVENT_FIELDS}))
-    return action
+    return action, remote
+
+
+def media_to_push(local_match) -> tuple[list, list]:
+    """(will_push, skipped) for one match's artifacts, with reasons.
+
+    Returned rather than filtered silently, so the UI can say *why* a video did
+    not travel instead of leaving the coach to wonder.
+    """
+    import library
+
+    will, skipped = [], []
+    for m in local_match.media:
+        src = library.abs_path(m)
+        if not os.path.exists(src):
+            skipped.append((m, "missing on this machine"))
+            continue
+        size_mb = (m.bytes or os.path.getsize(src)) / (1024 * 1024)
+        if m.kind in MEDIA_OPTIONAL and not SYNC_LARGE_MEDIA:
+            skipped.append((m, f"{m.kind} not synced by default"))
+        elif MEDIA_MAX_MB and size_mb > MEDIA_MAX_MB:
+            skipped.append((m, f"{size_mb:.0f} MB is over the "
+                               f"{MEDIA_MAX_MB:.0f} MB limit"))
+        else:
+            will.append(m)
+    return will, skipped
+
+
+def _copy_media(local_match, remote_match, shared_session) -> dict:
+    """Copy a match's artifacts into the shared library and index them there.
+
+    Runs *after* the match row has been committed, and its failures never roll
+    that back: a 2 GB video over club wifi will be interrupted, and losing the
+    match record because of it would be absurd. Individual files are skipped if
+    already present at the same size, so an interrupted push resumes rather than
+    starting over.
+    """
+    import shutil
+
+    import library
+
+    if not (SYNC_MEDIA and SHARED_LIBRARY_ROOT):
+        return {"copied": 0, "skipped": 0, "reason": "media sync off"}
+
+    will, skipped = media_to_push(local_match)
+    copied = 0
+    for m in will:
+        src = library.abs_path(m)
+        dest = os.path.join(SHARED_LIBRARY_ROOT, m.path)
+        try:
+            if not (os.path.exists(dest)
+                    and os.path.getsize(dest) == os.path.getsize(src)):
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copy2(src, dest)
+            existing = (shared_session.query(db.MediaFile)
+                        .filter_by(match_id=remote_match.id, path=m.path)
+                        .first())
+            if existing is None:
+                shared_session.add(db.MediaFile(
+                    match_id=remote_match.id, kind=m.kind, path=m.path,
+                    label=m.label, bytes=m.bytes))
+            copied += 1
+        except OSError as exc:
+            skipped.append((m, f"copy failed: {exc}"))
+    return {"copied": copied, "skipped": len(skipped),
+            "reasons": [r for _m, r in skipped]}
 
 
 def push(match_ids: list = None, dry_run: bool = False) -> dict:
@@ -175,12 +264,24 @@ def push(match_ids: list = None, dry_run: bool = False) -> dict:
                 continue
             shared = Session()
             try:
-                action = _copy_match(m, shared)
+                action, remote = _copy_match(m, shared)
                 shared.commit()
                 m.sync_state = "synced"
                 m.synced_at = db._utcnow()
                 pushed += 1
-                results.append({"slug": m.slug, "action": action})
+                entry = {"slug": m.slug, "action": action}
+
+                # Media is a separate, best-effort step: the match row is
+                # already safe, and an interrupted file copy must not undo it.
+                try:
+                    media = _copy_media(m, remote, shared)
+                    shared.commit()
+                    entry["media"] = media
+                except Exception as exc:
+                    shared.rollback()
+                    entry["media"] = {"copied": 0,
+                                      "error": f"{type(exc).__name__}: {exc}"}
+                results.append(entry)
             except Exception as exc:
                 shared.rollback()
                 m.sync_state = "pending"

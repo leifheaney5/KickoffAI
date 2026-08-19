@@ -15,8 +15,7 @@ import brand
 import control
 import ui_helpers as UI
 
-st.markdown(brand.app_css(), unsafe_allow_html=True)
-st.markdown(brand.page_header("SET UP", "Match Setup"), unsafe_allow_html=True)
+UI.page_setup("SET UP", "Match Setup")
 
 state = control.load_control()
 
