@@ -78,6 +78,56 @@ def build_config(args) -> PipelineConfig:
     )
 
 
+def start_recorder(path: str, source):
+    """Copy the incoming stream to disk alongside analysis.
+
+    A separate ffmpeg process pulls the same URL, so the footage is a faithful
+    copy at full frame rate rather than the stride-sampled frames the analyzer
+    decodes — and a crash in analysis cannot cost the recording.
+
+    Stream copy only: no re-encode, so this is nearly free. Returns None (with a
+    reason) when the source cannot be teed, which is the case for a local camera
+    device that cannot be opened twice.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        print("[live] ffmpeg missing; not recording.", flush=True)
+        return None
+    if isinstance(source, int) or str(source).isdigit():
+        print("[live] a camera device cannot be opened twice; not recording. "
+              "Use Voice Backup's screen capture for webcam footage.", flush=True)
+        return None
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-i", str(source), "-c", "copy", "-f", "mp4",
+           "-movflags", "+frag_keyframe+empty_moov", path]
+    try:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        print(f"[live] could not start the recorder: {exc}", flush=True)
+        return None
+
+
+def stop_recorder(proc, path: str) -> None:
+    """Finalise the recording. Fragmented MP4 stays playable even if cut short."""
+    import subprocess
+
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    print(f"[live] recording saved: {path} ({size / 1024 ** 2:.0f} MB)", flush=True)
+
+
 def write_status(path: str, payload: dict) -> None:
     """Atomically publish runner health for the app's status chips.
 
@@ -163,6 +213,11 @@ def main(argv=None) -> int:
     p.add_argument("--pause-flag", default=".live_eye_paused",
                    help="While this file exists, the runner pauses capture "
                         "(e.g. at half-time) without losing accumulated stats.")
+    p.add_argument("--record", default="",
+                   help="Also write the incoming stream to this file. A live run "
+                        "otherwise leaves no footage at all, so there is nothing "
+                        "to clip afterwards. Network sources are copied without "
+                        "re-encoding, so this costs almost nothing.")
     p.add_argument("--fixed-camera", action="store_true",
                    help="The camera does not pan, so a saved pitch calibration "
                         "stays valid for the whole match.")
@@ -190,6 +245,10 @@ def main(argv=None) -> int:
           flush=True)
 
     from vision.sources import resolve_video_source
+
+    recorder = start_recorder(args.record, source) if args.record else None
+    if recorder:
+        print(f"[live] recording the feed to {args.record}", flush=True)
 
     def _release_capture():
         cap = getattr(analyzer, "_cap", None)
@@ -299,8 +358,12 @@ def main(argv=None) -> int:
                 paused = False
                 was_paused = True
                 if paused_at is not None:
-                    # Idle time must not count against the run's fps figure.
-                    paused_seconds += time.time() - paused_at
+                    # Idle time must not count against the run's fps figure, nor
+                    # appear as match time: the wall clock keeps running through
+                    # half-time and the match does not.
+                    idle = time.time() - paused_at
+                    paused_seconds += idle
+                    analyzer.note_paused(idle)
                     paused_at = None
                 _reopen_capture()
                 print("[live] resumed — re-opened from the live edge.", flush=True)
@@ -351,6 +414,8 @@ def main(argv=None) -> int:
             analyzer.close(save=False)
         except Exception:
             pass
+        if recorder is not None:
+            stop_recorder(recorder, args.record)
         if pid_path.exists():
             pid_path.unlink()
         # Drop the health file so a later run can't read this match's numbers.

@@ -23,6 +23,48 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.20.0] - 2026-08-19
+
+Master plan Phase 0 and Phase 1. Plan: `MASTER_PLAN.md`.
+
+### Fixed
+
+- **Event timestamps drifted by the length of every stream outage.**
+  `t_sec = _raw_index / fps` counted frames *received*, not time *elapsed*, so a
+  60-second dropout stamped everything after it 60 seconds early and the error
+  compounded per reconnect. It propagated through `bridge.py` into wall-clock
+  stamps, which **cut clips in the wrong place**. Live sources now take time from
+  the wall clock; files keep frame-based video time, which is correct there and
+  has no outages. Half-time is excluded via `note_paused()`, so a break does not
+  read as forty-five minutes of play.
+- **A live run left no footage.** Only `match_stats.json` was written, so a live
+  match produced numbers and nothing to clip, review, or annotate for the
+  retrain. `--record` now tees the incoming stream to disk in a separate ffmpeg
+  process — a stream copy, so no re-encode and full frame rate — and the
+  supervisor turns it on by default. A crash in analysis cannot cost the
+  footage. Webcams decline cleanly (a camera device cannot be opened twice).
+
+### Added
+
+- **`analytics/` — the metric registry and query engine.** Metrics are
+  compositions of filters over events, declared once and evaluated generically,
+  rather than hand-written functions. `EventQuery` composes action, result, team,
+  player, source, half, minute, thirds, channels, box entry, pressure,
+  progression and coordinate provenance; `Metric` declares meaning, aggregation,
+  units, version and confidence.
+- **The existing sixteen stats migrated onto it**, and asserted to reproduce
+  `stats.py` exactly on real match data. That migration caught a real design
+  error before it shipped: the query defaulted to requiring `status="approved"`,
+  but events arrive `pending` and count until denied — every live match would
+  have shown zeros.
+- **Coordinate provenance** (`measured` / `projected` / `zone_estimate` /
+  `unknown`), with a metric reporting the **weakest** provenance behind it. A
+  mean over nine measurements and one zone estimate is not a measurement.
+- **A machine-readable catalogue**, per-90 that refuses meaningless samples, and
+  clip anchors on every result — the events behind a number, so a claim can be
+  watched rather than believed.
+- `feed.record_live` and `feed.fixed_camera` in `control.json`.
+
 ## [1.19.0] - 2026-08-19
 
 Own the capture. Proposal: `HARDWARE_PROPOSAL.md`.

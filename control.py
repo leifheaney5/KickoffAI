@@ -125,6 +125,9 @@ DEFAULT = {
         # this lets the trust gate say whether calibrated positions can be
         # believed, instead of assuming.
         "fixed_camera": False,
+        # Keep the footage a live run analyses. Without it a live match yields
+        # stats and nothing to clip, review or annotate for the retrain.
+        "record_live": True,
     },
     "noise_gate": 30,
     "audio_chunking": {

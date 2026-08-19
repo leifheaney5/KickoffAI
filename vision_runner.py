@@ -218,6 +218,11 @@ def build_argv(state: dict) -> list[str]:
     ]
     if feed.get("fixed_camera"):
         argv.append("--fixed-camera")
+    # Record the feed alongside analysis unless asked not to. Without this a
+    # live match produces stats and no footage, so none of it can be clipped.
+    if feed.get("record_live", True) and feed.get("kind") != "webcam":
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        argv += ["--record", os.path.join(RECORD_DIR, f"{stamp}-live.mp4")]
     if feed.get("kind") == "webcam":
         argv += ["--camera", str(int(source or 0))]
     else:

@@ -14,6 +14,7 @@ specialised modules in the right order and assembles their results into the
 from __future__ import annotations
 
 import os
+import time
 from collections import Counter
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -160,7 +161,7 @@ class MatchAnalyzer:
         Re-resolves the original input first so expiring media URLs (YouTube) get
         a fresh address; a direct Veo ``.m3u8`` simply resolves back to itself.
         """
-        import time
+
 
         if not self.config.live_reconnect or self._source_input is None:
             return False
@@ -282,7 +283,32 @@ class MatchAnalyzer:
         self._frame_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
         self._raw_index = -1
         self._frames = []
+        # Event time comes from the wall clock on a live source and from the
+        # frame counter on a file. The counter measures frames *received*, so on
+        # a live feed every stream outage would shift all later timestamps
+        # earlier by its duration and the error would compound per reconnect —
+        # which propagates into wall-clock event stamps and cuts clips in the
+        # wrong place. A file has no outages, and there video time is what you
+        # actually want.
+        self._is_live = resolved.kind in _NETWORK_KINDS or resolved.kind == "camera"
+        self._wall_start = time.time()
+        self._paused_wall = 0.0
         return self
+
+    def elapsed_seconds(self) -> float:
+        """Seconds of match time at the frame being processed.
+
+        Wall clock for a live source, frame count for a file — see open().
+        Time spent paused is excluded so a half-time break does not appear as
+        forty-five minutes of play.
+        """
+        if getattr(self, "_is_live", False):
+            return max(0.0, time.time() - self._wall_start - self._paused_wall)
+        return self._raw_index / self._source_fps
+
+    def note_paused(self, seconds: float) -> None:
+        """Tell the analyzer how long capture was deliberately idle."""
+        self._paused_wall = getattr(self, "_paused_wall", 0.0) + max(0.0, seconds)
 
     def step(self):
         """Process the next sampled frame.
@@ -307,7 +333,7 @@ class MatchAnalyzer:
             self._raw_index += 1
             if self._raw_index % self.config.frame_stride != 0:
                 continue
-            t_sec = self._raw_index / self._source_fps
+            t_sec = self.elapsed_seconds()
             if self.config.max_seconds and t_sec > self.config.max_seconds:
                 return None
             record = self._process_frame(self._raw_index, t_sec, frame)
