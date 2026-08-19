@@ -181,6 +181,135 @@ st.caption(f"Current match id: `{state.get('match_id', '')[:8] or '—'}`")
 
 st.write("")
 
+# --------------------------------------------------------------------------- #
+# Clips — cut the moments out of the match video
+#
+# Alignment is by wall clock, not the match clock: the match clock stops at
+# half-time while the video keeps rolling, so mapping match time onto video time
+# puts every second-half event minutes early.
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Clips", "VIDEO"), unsafe_allow_html=True)
+
+import clips as CL  # noqa: E402
+import screen_recorder  # noqa: E402
+
+if not CL.ffmpeg_available():
+    st.caption("Clipping needs ffmpeg (`brew install ffmpeg`).")
+else:
+    clip_video = st.text_input(
+        "Match video", value=st.session_state.get("kp_clip_video", ""),
+        placeholder="recordings/20260819-match.mp4", key="kp_clip_video_in",
+        help="One file covering the whole match, including half-time.")
+
+    anchor = None
+    if clip_video and os.path.exists(clip_video):
+        # If the app recorded it, alignment is already known exactly.
+        auto = next((r for r in screen_recorder.list_recordings()
+                     if r["path"] == clip_video), None)
+        rec_state = screen_recorder.status()
+        started = None
+        if auto:
+            started = auto["mtime"] - (CL.probe_duration(clip_video) or 0)
+        if started:
+            anchor = CL.anchor_from_recording(started)
+            st.caption("Aligned automatically — this video was recorded by the app.")
+        else:
+            st.caption("Point at one moment you can find in the video and "
+                       "everything else follows from it.")
+            clipworthy = [e for e in events if CL.is_clipworthy(e)]
+            if not clipworthy:
+                st.info("No goals, cards or shots on target logged, so there is "
+                        "nothing to clip yet.")
+            else:
+                ac1, ac2 = st.columns([2, 1])
+                pick = ac1.selectbox(
+                    "A moment you can see in the video", clipworthy,
+                    format_func=lambda e: f"{e.get('match_time','')} · "
+                                          f"{CL.clip_window(e)[0]} · "
+                                          f"{e.get('team','')}")
+                at_min = ac2.number_input("is at (minutes into the video)",
+                                          0.0, 300.0, 0.0, 0.5)
+                anchor = CL.anchor_from_event(pick, at_min * 60)
+
+    if anchor and clip_video and os.path.exists(clip_video):
+        duration = CL.probe_duration(clip_video)
+        plan = CL.plan_clips(events, anchor, duration=duration)
+        usable = [c for c in plan if c["ok"]]
+        st.caption(f"{len(usable)} clip(s) to cut"
+                   + (f" · {len(plan) - len(usable)} outside the video"
+                      if len(plan) > len(usable) else ""))
+        if plan:
+            st.dataframe(
+                [{"Match time": c["match_time"], "Moment": c["label"],
+                  "Team": c["team"], "Player": c["player"],
+                  "Video at": f"{c['start'] // 60:.0f}:{c['start'] % 60:04.1f}",
+                  "OK": "yes" if c["ok"] else c["why"]} for c in plan],
+                width="stretch", hide_index=True)
+
+        if st.button("Cut clips", type="primary", width="stretch",
+                     disabled=not usable):
+            bar = st.progress(0.0, text="Cutting…")
+            res = CL.extract(plan, clip_video,
+                             os.path.join("exports", "clips"),
+                             progress=lambda f, lbl: bar.progress(f, text=lbl))
+            bar.progress(1.0, text="Done")
+            st.session_state["kp_clips"] = res
+            st.session_state["kp_clip_video"] = clip_video
+            st.success(f"Cut {len(res['clips'])} clip(s).")
+            for f in res["failed"][:3]:
+                st.warning(f"{f['name']}: could not cut")
+            st.rerun()
+
+made = st.session_state.get("kp_clips")
+if made and made.get("clips"):
+    st.caption(f"{len(made['clips'])} clip(s) in exports/clips/")
+    for c in made["clips"][:6]:
+        st.markdown(f"**{c['match_time']} · {c['label']}** "
+                    f"{c['team']} {c['player']}")
+        st.video(c["path"])
+
+st.write("")
+
+# --------------------------------------------------------------------------- #
+# Player packs — what you actually hand to a player or parent
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Player pack", "SHARE"), unsafe_allow_html=True)
+st.caption("One player's own line, their clips and their season trend, in a "
+           "form a parent will open. Contains only that player.")
+
+import player_pack as PP  # noqa: E402
+
+pp_names = sorted(players.keys())
+if not pp_names:
+    st.caption("No player-attributed events yet.")
+else:
+    pk1, pk2 = st.columns([2, 1], vertical_alignment="bottom")
+    who = pk1.selectbox("Player", pp_names, key="pack_player")
+    if pk2.button("Build pack", type="primary", width="stretch"):
+        try:
+            pack = PP.build_pack(
+                who, events, clip_results=st.session_state.get("kp_clips"),
+                match_name=state.get("match_name", ""), clock=_match_clock())
+            st.session_state["kp_pack"] = pack
+        except Exception as exc:
+            st.error(f"Could not build the pack: {exc}")
+
+    pack = st.session_state.get("kp_pack")
+    if pack:
+        pc1, pc2 = st.columns([1, 1])
+        pc1.image(pack["card_bytes"], width="stretch")
+        with pc2:
+            st.caption(f"{len(pack['clips'])} clip(s) included.")
+            with open(pack["path"], "rb") as fh:
+                st.download_button("Download pack (.zip)", fh.read(),
+                                   file_name=os.path.basename(pack["path"]),
+                                   mime="application/zip", width="stretch")
+            st.download_button("Just the card (.png)", pack["card_bytes"],
+                               file_name=f"{who.replace('#', '')}_card.png",
+                               mime="image/png", width="stretch")
+
+st.write("")
+
 # ---- Share card — portrait summary image for texting / social ------------- #
 st.markdown(brand.section("Share card (mobile)"), unsafe_allow_html=True)
 if st.button("Generate share card", width="stretch"):

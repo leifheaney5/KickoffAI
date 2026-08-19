@@ -123,6 +123,113 @@ def vision_coverage(matches: list) -> dict:
     }
 
 
+# Per-player metrics tracked across a season. Deliberately the things an event
+# log can state plainly — no derived ratings, which would invent precision the
+# data does not have.
+PLAYER_METRICS = ("Goals", "Shots", "On Target", "Saves", "Tackles",
+                  "Fouls", "Yellow Cards", "Red Cards")
+
+_ACTION_METRIC = {
+    "goal": "Goals", "shot": "Shots", "save": "Saves", "tackle": "Tackles",
+    "foul": "Fouls",
+}
+
+
+def _metrics_for(event: dict) -> list:
+    """Which season metrics one event contributes to."""
+    action = (event.get("action") or "").lower()
+    result = (event.get("result") or "").lower()
+    out = []
+    if action == "goal" or result == "scored":
+        out += ["Goals", "Shots", "On Target"]
+    elif action == "shot":
+        out.append("Shots")
+        if result in ("on target", "saved"):
+            out.append("On Target")
+    elif action in ("card", "yellow_card", "red_card"):
+        out.append("Red Cards" if ("red" in result or action == "red_card")
+                   else "Yellow Cards")
+    elif action in _ACTION_METRIC:
+        out.append(_ACTION_METRIC[action])
+    return out
+
+
+def player_season(event_rows: list) -> list:
+    """Per-player season totals and per-match lines, best contributors first.
+
+    `event_rows`: dicts with player, team, action, result, and the match they
+    belong to (`match`, `played_on`). Everything comes from the mirrored event
+    log, which has carried a player on every row since the first release — the
+    season view simply never read it.
+
+    Returns [{player, team, appearances, totals{...}, matches[...]}].
+    """
+    by_player = {}
+    for e in event_rows or []:
+        player = (e.get("player") or "").strip()
+        if not player or e.get("status") == "denied":
+            continue
+        rec = by_player.setdefault(player, {
+            "player": player, "team": (e.get("team") or "").strip(),
+            "totals": {m: 0 for m in PLAYER_METRICS}, "_matches": {}})
+        match_key = e.get("match") or ""
+        line = rec["_matches"].setdefault(match_key, {
+            "match": match_key, "played_on": e.get("played_on"),
+            **{m: 0 for m in PLAYER_METRICS}})
+        for metric in _metrics_for(e):
+            rec["totals"][metric] += 1
+            line[metric] += 1
+
+    out = []
+    for rec in by_player.values():
+        matches = sorted(rec.pop("_matches").values(),
+                         key=lambda m: (m["played_on"] is None, m["played_on"]))
+        out.append({**rec, "appearances": len(matches), "matches": matches})
+    out.sort(key=lambda r: (r["totals"]["Goals"], r["totals"]["On Target"],
+                            r["appearances"]), reverse=True)
+    return out
+
+
+def player_form(player_row: dict, metric: str = "Goals", window: int = 3) -> dict:
+    """Recent form against a player's *own* season baseline.
+
+    Compared to themselves, never to the squad: in a youth team the spread
+    between players says more about age and position than about progress, so a
+    squad ranking would be a misleading thing to show a child's parent.
+    """
+    matches = (player_row or {}).get("matches") or []
+    if not matches:
+        return {"metric": metric, "recent": 0.0, "baseline": 0.0,
+                "trend": "flat", "matches": 0}
+    values = [m.get(metric, 0) for m in matches]
+    recent = values[-window:]
+    recent_avg = sum(recent) / len(recent)
+    baseline = sum(values) / len(values)
+    delta = recent_avg - baseline
+    trend = "up" if delta > 0.25 else "down" if delta < -0.25 else "flat"
+    return {"metric": metric, "recent": round(recent_avg, 2),
+            "baseline": round(baseline, 2), "trend": trend,
+            "matches": len(matches)}
+
+
+def squad_involvement(player_rows: list, total_matches: int) -> list:
+    """Appearances per player — how evenly the squad is being used.
+
+    Many youth leagues expect roughly equal playing time, and nothing in the app
+    made uneven involvement visible.
+    """
+    rows = []
+    for p in player_rows or []:
+        apps = p.get("appearances", 0)
+        rows.append({
+            "player": p["player"], "team": p.get("team", ""),
+            "appearances": apps,
+            "share": round(100 * apps / total_matches) if total_matches else 0,
+        })
+    rows.sort(key=lambda r: r["appearances"])
+    return rows
+
+
 def top_scorers(goal_rows: list) -> list:
     """Tally goals per (player, team) from goal events.
 

@@ -28,7 +28,7 @@ def load_season(_viewer_id=None):
     users on one machine never see each other's cached library.
     """
     db.init_db()
-    matches, goals, timeline = [], [], []
+    matches, goals, timeline, player_rows = [], [], [], []
     viewer = auth.current_user()
     with db.session() as s:
         for m in s.query(db.Match).order_by(db.Match.played_on).all():
@@ -55,11 +55,20 @@ def load_season(_viewer_id=None):
                 if e.action == "goal" or e.result == "scored":
                     goals.append({"player": e.player,
                                   "team": role_name.get(e.team) or e.team or ""})
-    return matches, goals, timeline
+                # Every event, for the per-player season view. The `player`
+                # column has been mirrored since the first release; nothing
+                # ever read it.
+                if e.player:
+                    player_rows.append({
+                        "player": e.player,
+                        "team": role_name.get(e.team) or e.team or "",
+                        "action": e.action, "result": e.result,
+                        "match": m.name, "played_on": m.played_on})
+    return matches, goals, timeline, player_rows
 
 
 me = auth.current_user()
-matches, goals, timeline = load_season(me["id"] if me else None)
+matches, goals, timeline, player_rows = load_season(me["id"] if me else None)
 
 if not matches:
     st.info("No matches in the library yet. Archive matches from the dashboard "
@@ -145,3 +154,56 @@ else:
                                              "away_possession"]], height=260)
         st.caption(f"{len(trend)} of {cov['matches']} matches have a measured "
                    "camera run.")
+
+st.write("")
+
+# --------------------------------------------------------------------------- #
+# Player development
+#
+# Season previously counted goals and nothing else, yet every mirrored event has
+# carried a player since the first release. Developing players is the job; this
+# is the view that was missing.
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Player development"), unsafe_allow_html=True)
+
+people = season.player_season(player_rows)
+if not people:
+    st.caption("No player-attributed events yet. Name the player when you log "
+               "an event (“home number 9 shot on target”) and their season "
+               "builds itself from there.")
+else:
+    pick = st.selectbox("Player", [p["player"] for p in people],
+                        key="season_player")
+    row = next(p for p in people if p["player"] == pick)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Appearances", row["appearances"])
+    m2.metric("Goals", row["totals"]["Goals"])
+    m3.metric("Shots", row["totals"]["Shots"])
+    m4.metric("Tackles", row["totals"]["Tackles"])
+
+    metric = st.selectbox("Trend", list(season.PLAYER_METRICS), index=0,
+                          key="season_player_metric")
+    form = season.player_form(row, metric)
+    arrow = {"up": "▲", "down": "▼", "flat": "="}[form["trend"]]
+    st.caption(
+        f"{arrow}  {form['recent']} {metric.lower()} per match recently, "
+        f"against a season average of {form['baseline']} — compared to their "
+        f"own baseline, not to the squad.")
+
+    if row["matches"]:
+        mdf = pd.DataFrame(row["matches"])
+        st.bar_chart(mdf.set_index("match")[metric], height=240)
+        st.dataframe(
+            mdf[["match", "played_on"] + list(season.PLAYER_METRICS)],
+            width="stretch", hide_index=True)
+
+    st.write("")
+    st.markdown(brand.section("Squad involvement"), unsafe_allow_html=True)
+    st.caption("Least-used first. Many youth leagues expect roughly equal "
+               "playing time, and nothing here used to show it.")
+    st.dataframe(
+        [{"Player": r["player"], "Team": r["team"],
+          "Matches": r["appearances"], "Share": f"{r['share']}%"}
+         for r in season.squad_involvement(people, len(matches))],
+        width="stretch", hide_index=True)

@@ -23,6 +23,51 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.18.0] - 2026-08-19
+
+Clips, player development, and share packs — the moment, the trend, and a way to
+hand both to the player. Plan: `FEATURES_PLAN.md`.
+
+### Added
+
+- **`clips.py` — automatic match clips.** Cuts goals, cards, shots on target and
+  saves out of the match video with ffmpeg. Nobody watches a 90-minute match
+  video; everybody watches the goal.
+
+  Alignment is by **wall clock**, not the match clock. Mapping match time onto
+  video time breaks at the interval — the match clock stops at 45:00 while the
+  video keeps rolling — so a second-half event lands minutes early. Measured on
+  a worked example: an event at match 50:00 sits at video 70:00, a 20-minute
+  error. `video_position = event_timestamp - recording_started_at` removes the
+  problem outright. Videos the app recorded align automatically; for anything
+  else the anchor is derived from one moment the user can point at ("the first
+  goal is at 12:30"), since nobody knows when a recording began.
+
+  Goals get a longer window than cards (build-up matters for one, not the
+  other), events outside the video are flagged rather than cut, and a plan is
+  shown before anything runs so a bad anchor is obvious before ffmpeg spends
+  minutes on it.
+- **Player development.** `season.player_season()`, `player_form()` and
+  `squad_involvement()`, with a Players view on the Season page. Season counted
+  goals and nothing else, yet every mirrored event has carried a `player` since
+  the first release — the data was there and simply never read. Form compares a
+  player to **their own** baseline, never to the squad: in a youth team the
+  spread between players says more about age and position than about progress.
+  Squad involvement shows appearances least-used first, since many youth leagues
+  expect roughly equal playing time and nothing made that visible.
+- **`player_pack.py` — per-player share packs.** A portrait card plus that
+  player's clips and season trend, as a zip a parent will open. Scoped to one
+  player: no squad table, no other children's names. The card's height follows
+  its content — a fixed portrait sized for a six-stat forward left a defender
+  with two tackles looking like a broken layout.
+
+### Notes
+
+Deliberately no new spatial analytics. Ball detection still grades most runs
+*indicative* (`quality.py`), so shape-over-time or positional patterns would ship
+caveated and teach coaches to distrust the numbers. These three features run on
+the event log and the video file, both reliable today.
+
 ## [1.17.0] - 2026-08-19
 
 The touchline release: watch a live match from a phone. Plan:
