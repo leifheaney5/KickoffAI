@@ -34,6 +34,9 @@ recordings/
 exports/*
 !exports/.gitkeep
 !exports/README.md
+# The vision page is authored, not generated — it is the shareable form of
+# PRODUCT_VISION.md and belongs in version control with it.
+!exports/vision.html
 
 # Vision pipeline artifacts. Large regenerables stay ignored; the trained model,
 # the annotation zip, and the public dataset are kept IN-REPO so both the desktop

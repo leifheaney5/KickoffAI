@@ -1,0 +1,591 @@
+<title>Kickoff Pulse Roadmap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+/* ── Tokens ────────────────────────────────────────────────────────────────
+   Palette derived from the app's own brand kit (brand.py): Primary Navy,
+   Pulse Blue, Signal Blue, and the team red kept strictly semantic. Neutrals
+   are biased cool/navy so they read as chosen rather than inherited grey.   */
+:root {
+  --ground:      #F2F5FA;
+  --surface:     #FFFFFF;
+  --surface-2:   #E9EEF7;
+  --ink:         #0B1220;
+  --ink-2:       #33425C;
+  --chalk:       #6B7B99;
+  --rule:        #CFD9E9;
+  --rule-soft:   #E2E9F4;
+  --pulse:       #1257C8;
+  --pulse-soft:  #E4EDFD;
+  --flag:        #B3261E;
+  --flag-soft:   #FBE7E5;
+  --go:          #17694A;
+  --go-soft:     #E1F1E9;
+
+  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --measure: 66ch;
+  --rail: 132px;
+}
+
+:root:not([data-theme="light"]) {
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:     #080D18;
+    --surface:    #0E1626;
+    --surface-2:  #141F33;
+    --ink:        #E8EFFB;
+    --ink-2:      #B6C6E0;
+    --chalk:      #8698B8;
+    --rule:       #24314A;
+    --rule-soft:  #1A2437;
+    --pulse:      #6BA6FF;
+    --pulse-soft: #12213C;
+    --flag:       #FF8B80;
+    --flag-soft:  #2C1614;
+    --go:         #6FD3A6;
+    --go-soft:    #10251C;
+  }
+}
+:root[data-theme="dark"] {
+  --ground:     #080D18;
+  --surface:    #0E1626;
+  --surface-2:  #141F33;
+  --ink:        #E8EFFB;
+  --ink-2:      #B6C6E0;
+  --chalk:      #8698B8;
+  --rule:       #24314A;
+  --rule-soft:  #1A2437;
+  --pulse:      #6BA6FF;
+  --pulse-soft: #12213C;
+  --flag:       #FF8B80;
+  --flag-soft:  #2C1614;
+  --go:         #6FD3A6;
+  --go-soft:    #10251C;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap {
+  max-width: calc(var(--rail) + var(--measure) + 4rem);
+  margin: 0 auto;
+  padding: 0 1.5rem 6rem;
+}
+
+/* Pitch-line rule: a hairline that steps in, like a marking on grass. */
+.rule { border: 0; height: 1px; background: var(--rule); margin: 0; }
+
+/* ── Masthead ─────────────────────────────────────────────────────────── */
+.mast { padding: 5rem 0 2.5rem; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  margin: 0 0 1.75rem;
+}
+h1 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: clamp(2.6rem, 7vw, 4.4rem);
+  line-height: 1.02;
+  letter-spacing: -.02em;
+  margin: 0 0 1.5rem;
+  text-wrap: balance;
+  max-width: 16ch;
+}
+.thesis {
+  font-family: var(--serif);
+  font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+  line-height: 1.45;
+  color: var(--ink-2);
+  max-width: 44ch;
+  margin: 0 0 2.25rem;
+  text-wrap: balance;
+}
+.thesis strong { color: var(--ink); font-weight: 600; }
+.standing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem 2rem;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--chalk);
+  padding-bottom: 2.5rem;
+}
+.standing b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ── Sections on a rail ───────────────────────────────────────────────── */
+section { padding: 3.25rem 0; border-top: 1px solid var(--rule-soft); }
+section:first-of-type { border-top: 0; }
+.row { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); gap: 2rem; }
+.rail {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  padding-top: .55rem;
+  line-height: 1.5;
+}
+.rail .n {
+  display: block;
+  font-size: 22px;
+  letter-spacing: 0;
+  color: var(--pulse);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: .3rem;
+}
+.body { max-width: var(--measure); }
+.body > * + * { margin-top: 1.05rem; }
+
+h2 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: clamp(1.6rem, 3.4vw, 2.15rem);
+  line-height: 1.15;
+  letter-spacing: -.015em;
+  margin: 0 0 1.1rem;
+  text-wrap: balance;
+}
+h3 {
+  font-family: var(--sans);
+  font-weight: 650;
+  font-size: 1.02rem;
+  letter-spacing: -.005em;
+  margin: 2rem 0 .5rem;
+}
+p { margin: 0; }
+.lede { font-size: 1.1rem; color: var(--ink-2); }
+strong { font-weight: 650; }
+em { font-style: italic; }
+
+ul { margin: 0; padding-left: 1.15rem; }
+li + li { margin-top: .5rem; }
+li::marker { color: var(--chalk); }
+
+/* ── Status chips: the roadmap's most important information is what's
+      blocked, so state gets form as well as words. ─────────────────────── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: .2rem .5rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  vertical-align: .12em;
+}
+.chip.blocked { background: var(--flag-soft); color: var(--flag); }
+.chip.ready   { background: var(--go-soft);   color: var(--go); }
+.chip.next    { background: var(--pulse-soft); color: var(--pulse); }
+
+/* ── Keystone callouts ────────────────────────────────────────────────── */
+.keystone {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--flag);
+  border-radius: 4px;
+  padding: 1.15rem 1.3rem;
+}
+.keystone h3 { margin: .35rem 0 .45rem; font-size: 1.06rem; }
+.keystone p { color: var(--ink-2); font-size: .96rem; }
+
+.note {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1.1rem 1.25rem;
+  font-size: .96rem;
+  color: var(--ink-2);
+}
+.note strong { color: var(--ink); }
+
+/* ── Table ────────────────────────────────────────────────────────────── */
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: .94rem; min-width: 34rem; }
+caption {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  padding-bottom: .7rem;
+}
+th, td { text-align: left; padding: .68rem .8rem .68rem 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  border-bottom-color: var(--rule);
+}
+td:first-child { font-weight: 650; white-space: nowrap; padding-right: 1.4rem; }
+tbody tr:last-child td { border-bottom: 0; }
+
+/* ── Horizons ─────────────────────────────────────────────────────────── */
+.horizon { border-top: 1px solid var(--rule-soft); padding-top: 1.9rem; margin-top: 1.9rem; }
+.horizon:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+.htag {
+  display: flex;
+  align-items: baseline;
+  gap: .75rem;
+  flex-wrap: wrap;
+  margin-bottom: .35rem;
+}
+.htag .h {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--pulse);
+}
+.htag .when { font-family: var(--mono); font-size: 11px; color: var(--chalk); }
+.horizon h3 { margin: 0 0 .5rem; font-family: var(--serif); font-weight: 600; font-size: 1.35rem; letter-spacing: -.01em; }
+
+/* ── Sequencing ───────────────────────────────────────────────────────── */
+.seq { display: grid; gap: .5rem; }
+.step {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: .85rem 1rem;
+}
+.step .when {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--chalk);
+  padding-top: .2rem;
+}
+.step .what { font-size: .95rem; }
+.step .what b { display: block; margin-bottom: .15rem; }
+.step .what span { color: var(--ink-2); }
+
+/* ── Questions ────────────────────────────────────────────────────────── */
+.q { border-top: 1px solid var(--rule-soft); padding-top: 1rem; margin-top: 1rem; }
+.q:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+.q b { display: block; font-size: 1rem; margin-bottom: .2rem; }
+.q span { color: var(--ink-2); font-size: .96rem; }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--chalk);
+}
+
+@media (max-width: 720px) {
+  :root { --rail: 0px; }
+  .row { grid-template-columns: 1fr; gap: .9rem; }
+  .rail { padding-top: 0; }
+  .rail .n { display: inline; font-size: 11px; letter-spacing: .16em; color: var(--pulse); margin-right: .5rem; }
+  .mast { padding-top: 3rem; }
+  .step { grid-template-columns: 1fr; gap: .3rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Kickoff Pulse · Product vision &amp; roadmap</p>
+    <h1>The analysis layer youth football gets to keep.</h1>
+    <p class="thesis">From a tool that <em>records a match</em> to the system a club
+      owns outright — <strong>trustworthy first, shareable second, institutional
+      third.</strong></p>
+    <div class="standing">
+      <span><b>18,500</b> lines</span>
+      <span><b>213</b> tests</span>
+      <span><b>v1.18.0</b> shipped</span>
+      <span><b>1</b> coach, <b>1</b> maintainer</span>
+    </div>
+  </header>
+  <hr class="rule">
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">01</span>The position</div>
+      <div class="body">
+        <h2>Local-first is the moat, not a preference</h2>
+        <p class="lede">Nothing leaves the machine. That has been treated as a
+          technical choice. It is the strongest strategic position the product
+          has, and it should be stated as one.</p>
+        <p>This is footage and performance data about <strong>children</strong>.
+          Every cloud rival asks a club to upload video of minors to a vendor's
+          servers, under that vendor's retention policy, in another jurisdiction,
+          with access controlled by someone the club will never meet. That is a
+          problem for them and an advantage here — one that grows as youth-sports
+          data protection tightens, not one that erodes.</p>
+
+        <h3>The club owns its data, literally</h3>
+        <p>It sits on their machines. No export fight, no vendor lock-in, no
+          “we're sunsetting this product” e-mail.</p>
+
+        <h3>It works where football is played</h3>
+        <p>Rural pitches have no signal. Capture already never depends on the
+          network — that was a correctness decision, and it is also the reason it
+          works when a cloud product would not.</p>
+
+        <h3>Honesty is a feature</h3>
+        <p>Every camera run is graded <em>measured</em>, <em>indicative</em> or
+          <em>unusable</em>, with the reason stated. Youth analytics is full of
+          confident-looking numbers from bad data. An app that says when not to
+          trust it earns something no marketing claim can.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">02</span>Audiences</div>
+      <div class="body">
+        <h2>Four audiences. One is served.</h2>
+        <div class="scroll">
+          <table>
+            <caption>Who this is for, and how well</caption>
+            <thead>
+              <tr><th scope="col">Audience</th><th scope="col">What they want</th><th scope="col">Served today</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>The coach</td><td>Know what happened; know what to work on</td><td>Well — this is the whole app</td></tr>
+              <tr><td>The player</td><td>See myself improving; watch my moments</td><td>Barely — a pack someone else makes</td></tr>
+              <tr><td>The team</td><td>Consistency across staff; shared preparation</td><td>Thinly — club mode exists, workflows don't</td></tr>
+              <tr><td>The club</td><td>Standards, pathways, evidence for a board</td><td>Not at all</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Each unserved audience is also a distribution channel. A parent
+          forwards a clip of their own child; a Director of Coaching who can see
+          across age groups asks every coach to use it. Nothing spreads a
+          coaching tool faster than a family seeing something about their own kid.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">03</span>Horizons</div>
+      <div class="body">
+        <h2>Be trustworthy, then shareable, then institutional</h2>
+        <p class="lede">The order is deliberate. A club platform built on numbers
+          nobody trusts is worse than no club platform.</p>
+
+        <div class="horizon">
+          <div class="htag"><span class="h">Horizon 1</span><span class="when">Next few months</span></div>
+          <h3>Make the promise true</h3>
+          <p>Reliability and honesty before scale. A club that adopts a tool
+            which fails on match day never adopts it twice.</p>
+          <ul>
+            <li><strong>Clear the vision ceiling</strong> <span class="chip blocked">Blocked</span><br>
+              Ball detection sits at 4–12%, so possession and passing grade
+              <em>indicative</em> and everything spatial stays out of reach. The
+              highest-leverage task in the roadmap.</li>
+            <li><strong>Prove match day</strong> <span class="chip blocked">Blocked</span><br>
+              A full live soak: token expiry, reconnects, thermals, fps decay
+              across 90 minutes. Still the biggest match-day unknown.</li>
+            <li><strong>Close the coaching loop</strong> <span class="chip next">Next</span><br>
+              Opponent scouting from matches already archived; training links that
+              turn “we conceded three from our left” into a session; in-match
+              assistance the console can already derive.</li>
+          </ul>
+        </div>
+
+        <div class="horizon">
+          <div class="htag"><span class="h">Horizon 2</span><span class="when">~6 months</span></div>
+          <h3>From coach tool to team platform</h3>
+          <ul>
+            <li><strong>Give the player their own surface.</strong> Today they
+              receive a pack <em>if a coach makes one</em>. They should have their
+              own read-only view — season, clips, trend, playing time.</li>
+            <li><strong>Take safeguarding seriously.</strong> A prerequisite, not
+              a feature. See below.</li>
+            <li><strong>Team workflows.</strong> Multiple staff, roles, shared
+              notes, a handover when someone else runs the touchline.</li>
+            <li><strong>Make it installable.</strong> The app is unsigned. macOS
+              warns any coach who isn't you, which ends most adoptions at the
+              first click.</li>
+          </ul>
+          <div class="note" style="margin-top:1.2rem">
+            <strong>The safeguarding gap.</strong> The app holds video and
+            performance data about minors and has no consent record, no retention
+            policy, and no way to delete a <em>player</em> — only a match. At
+            single-coach scale that is a gap. At club scale it is a liability, and
+            it undercuts the exact privacy position that makes this distinctive.
+            Local-first makes it <em>easier</em> to solve than the cloud
+            alternative: there is one place to delete from. That is the point.
+          </div>
+        </div>
+
+        <div class="horizon">
+          <div class="htag"><span class="h">Horizon 3</span><span class="when">~12 months</span></div>
+          <h3>The club platform</h3>
+          <ul>
+            <li><strong>Player pathways.</strong> “How did this player develop
+              from U12 to U16?” needs identity that persists across teams and
+              seasons — which is why jersey identity matters far beyond one match.</li>
+            <li><strong>Club standards.</strong> Comparable data across age
+              groups. The season layer already computes most pieces per team; the
+              work is aggregation and permissioning, not new analysis.</li>
+            <li><strong>Evidence for a board.</strong> Participation, development
+              and coaching quality — mostly assembly over data already held, and
+              what makes a club <em>pay</em> attention.</li>
+            <li><strong>Coach development</strong>, handled carefully. The same
+              data that shows player progress implies coach effectiveness. Done
+              well it supports coaches; done badly it is surveillance and destroys
+              adoption. Opt-in, coach-first, never a league table of adults.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">04</span>Keystones</div>
+      <div class="body">
+        <h2>Two things gate everything, and neither is code</h2>
+        <div class="keystone">
+          <span class="chip blocked">Blocked</span>
+          <h3>A 1080p Veo export</h3>
+          <p>Unlocks the retrain → ball detection → possession, passing, shape,
+            pathways. Without it, roughly a third of this roadmap ships
+            permanently graded <em>indicative</em>.</p>
+        </div>
+        <div class="keystone" style="margin-top:.9rem">
+          <span class="chip blocked">Blocked</span>
+          <h3>A second real user</h3>
+          <p>Every decision so far has been validated against one coach. The
+            first outside coach will find assumptions invisible from inside — and
+            Horizon 2 is largely guesswork until then.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">05</span>Hard truths</div>
+      <div class="body">
+        <h2>What could stop this</h2>
+        <h3>A solo maintainer is the biggest risk to club adoption</h3>
+        <p>A club running its season on this depends on one person's evenings.
+          Before selling anyone on Horizon 3, decide what happens if you stop:
+          open-source with a community, a second maintainer, or explicitly a
+          personal tool others may use at their own risk. Clubs are right to ask,
+          and the answer changes what you should promise.</p>
+        <h3>The vision ceiling is a data problem, not a code problem</h3>
+        <p>It needs annotation work. No amount of engineering routes around it.</p>
+        <h3>Scope discipline will decide this</h3>
+        <p>The temptation at every horizon is to add a metric. The differentiator
+          is not more numbers — it is trustworthy numbers, honestly labelled, that
+          reach the right person.</p>
+        <h3>Sustainability is unanswered</h3>
+        <p>Free and local forever? Paid for clubs? Support contracts? It needs no
+          answer today, but Horizon 3 assumes clubs depend on it, and dependency
+          without a sustainability model is a promise that breaks.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">06</span>Not building</div>
+      <div class="body">
+        <h2>Deliberately out of scope</h2>
+        <ul>
+          <li><strong>Live streaming or broadcast.</strong> Veo does it;
+            competing there is a rout.</li>
+          <li><strong>A cloud rewrite.</strong> It would trade away the entire
+            defensible position.</li>
+          <li><strong>Predictive scouting ratings.</strong> At this data volume
+            they would be numerology, and on children they would be indefensible.</li>
+          <li><strong>A native mobile app</strong>, until the sideline view proves
+            phones matter. Read-only web is most of the value at a fraction of the
+            cost.</li>
+          <li><strong>More spatial metrics before the retrain.</strong> They would
+            ship <em>indicative</em> and teach coaches to distrust everything else.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">07</span>Sequence</div>
+      <div class="body">
+        <h2>The order of operations</h2>
+        <div class="seq">
+          <div class="step">
+            <div class="when">Now</div>
+            <div class="what"><b>Trustworthy vision</b>
+              <span>Retrain · live soak · opponent scouting · training links</span></div>
+          </div>
+          <div class="step">
+            <div class="when">Horizon 2</div>
+            <div class="what"><b>Safe in front of families</b>
+              <span>Player surface · safeguarding · team workflows · signed app</span></div>
+          </div>
+          <div class="step">
+            <div class="when">Horizon 3</div>
+            <div class="what"><b>A club platform</b>
+              <span>Pathways · club dashboards · board reporting</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <div class="rail"><span class="n">08</span>Open</div>
+      <div class="body">
+        <h2>Questions only you can answer</h2>
+        <div class="q"><b>Is this a product or a personal tool?</b>
+          <span>Everything in Horizons 2–3 assumes other people depend on it.
+          That is a commitment, not a feature.</span></div>
+        <div class="q"><b>Who owns a player's data in a club install?</b>
+          <span>The club, the coach, or the family. This decides the whole
+          safeguarding design and cannot be retrofitted.</span></div>
+        <div class="q"><b>What happens at the age boundary?</b>
+          <span>A player turning 18, or leaving the club, needs a defined
+          outcome for their data.</span></div>
+        <div class="q"><b>Is coach-effectiveness data ever surfaced upward?</b>
+          <span>Say no and Horizon 3 is simpler and safer. Say yes and it needs
+          its own careful design.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>Kickoff Pulse · v1.18.0 · local-first soccer intelligence</footer>
+</div>
