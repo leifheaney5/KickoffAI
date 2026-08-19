@@ -1,5 +1,11 @@
 # The Eye — ingest, live analytics, and the match-stat programme
 
+> **Superseded by [MASTER_PLAN.md](MASTER_PLAN.md)**, which merges this with
+> the Opta-style analytics specification. Kept for its detail on the two
+> ingest defects and the stat taxonomy; the sequencing there is now Phase 0
+> and Phases 2–5 of the master plan.
+
+
 **Scope:** what the vision system takes in, what it can tell you *while the
 match is still happening*, and the full match-stat taxonomy both ingests feed.
 The trust gate and the report machinery are reused, not rebuilt.
