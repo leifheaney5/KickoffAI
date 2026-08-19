@@ -154,6 +154,14 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
             slug = match.slug
             match_id = match.id
 
+        # The match is now safely in the library, so starting a new one is no
+        # longer destructive. Recorded before indexing so a failure there cannot
+        # leave an archived match looking unsaved.
+        try:
+            control.mark_archived(state)
+        except OSError:
+            pass
+
         # Index for semantic search AFTER commit (FK requires the match to exist).
         # No-op on SQLite or if the embedding model is unavailable.
         try:

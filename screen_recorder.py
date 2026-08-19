@@ -32,6 +32,12 @@ STATE_FILE = os.environ.get("KICKOFF_RECORDER_FILE", "recorder.json")
 # Reuse the same mic selector the audio tracker uses (e.g. "AirPods").
 MIC_SELECT = os.environ.get("KICKOFF_MIC")
 
+# Retention. Recordings are gigabytes per match and nothing used to delete them,
+# so the directory grew without bound until the disk filled — which ends a live
+# capture. 0 disables a limit.
+KEEP_DAYS = float(os.environ.get("KICKOFF_RECORDINGS_KEEP_DAYS", "30"))
+MAX_GB = float(os.environ.get("KICKOFF_RECORDINGS_MAX_GB", "20"))
+
 
 def is_supported() -> bool:
     """True on macOS with ffmpeg available."""
@@ -286,6 +292,81 @@ def _log_tail(path: str, n: int = 1200) -> str:
             return fh.read()[-n:].strip()
     except OSError:
         return ""
+
+
+def disk_usage() -> dict:
+    """Size of the recordings directory and free space on its volume.
+
+    Recordings are the fastest-growing thing the app writes (gigabytes per
+    match). A full disk mid-match ends the capture, so this is worth surfacing
+    before it happens rather than after.
+    """
+    total = 0
+    if os.path.isdir(RECORD_DIR):
+        for name in os.listdir(RECORD_DIR):
+            try:
+                total += os.stat(os.path.join(RECORD_DIR, name)).st_size
+            except OSError:
+                pass
+    try:
+        st = os.statvfs(RECORD_DIR if os.path.isdir(RECORD_DIR) else ".")
+        free = st.f_bavail * st.f_frsize
+    except (OSError, AttributeError):
+        free = 0
+    return {"bytes": total, "gb": total / (1024 ** 3),
+            "free_bytes": free, "free_gb": free / (1024 ** 3)}
+
+
+def prune_recordings(keep_days: float = None, max_gb: float = None,
+                     dry_run: bool = False) -> dict:
+    """Delete old recordings, oldest first, to stay under the retention limits.
+
+    Two independent limits, both optional:
+      * ``keep_days`` — delete anything older than this
+      * ``max_gb``    — delete oldest-first until the directory fits
+
+    Never touches the recording currently in progress. Returns what was (or
+    would be) removed, so a caller can report it honestly.
+    """
+    keep_days = KEEP_DAYS if keep_days is None else keep_days
+    max_gb = MAX_GB if max_gb is None else max_gb
+
+    active = (status() or {}).get("file")
+    recs = [r for r in list_recordings() if r["path"] != active]
+    removed, freed = [], 0
+
+    if keep_days and keep_days > 0:
+        cutoff = time.time() - keep_days * 86400
+        for r in list(recs):
+            if r["mtime"] < cutoff:
+                removed.append(r)
+                freed += r["size"]
+                recs.remove(r)
+
+    if max_gb and max_gb > 0:
+        budget = max_gb * (1024 ** 3)
+        # `recs` is newest-first; keep newest until the budget runs out.
+        running = 0
+        for r in list(recs):
+            running += r["size"]
+            if running > budget:
+                removed.append(r)
+                freed += r["size"]
+
+    if not dry_run:
+        for r in removed:
+            try:
+                os.remove(r["path"])
+                # Drop the paired ffmpeg log alongside the video.
+                log = os.path.splitext(r["path"])[0] + ".log"
+                if os.path.exists(log):
+                    os.remove(log)
+            except OSError:
+                pass
+
+    return {"removed": [r["name"] for r in removed], "count": len(removed),
+            "freed_bytes": freed, "freed_gb": freed / (1024 ** 3),
+            "dry_run": dry_run}
 
 
 def list_recordings() -> list[dict]:

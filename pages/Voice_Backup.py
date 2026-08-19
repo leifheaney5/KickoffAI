@@ -97,8 +97,36 @@ else:
                 st.code(err["detail"])
 
     recs = screen_recorder.list_recordings()
+    usage = screen_recorder.disk_usage()
     if recs:
-        with st.expander(f"Recordings ({len(recs)})"):
+        with st.expander(f"Recordings ({len(recs)} · {usage['gb']:.1f} GB)"):
+            # Recordings are the fastest-growing thing the app writes, and a full
+            # disk ends a live capture. Surface it before that happens.
+            du1, du2 = st.columns(2)
+            du1.metric("Recordings", f"{usage['gb']:.1f} GB")
+            du2.metric("Free on disk", f"{usage['free_gb']:.0f} GB")
+            if usage["free_gb"] < 10:
+                st.error("Less than 10 GB free — a long capture may run out of "
+                         "space mid-match.")
+
+            plan = screen_recorder.prune_recordings(dry_run=True)
+            if plan["count"]:
+                st.caption(
+                    f"Retention: keep {screen_recorder.KEEP_DAYS:.0f} days / "
+                    f"{screen_recorder.MAX_GB:.0f} GB. "
+                    f"{plan['count']} file(s) are over the limit "
+                    f"({plan['freed_gb']:.1f} GB).")
+                if st.button(f"Delete {plan['count']} old recording(s)",
+                             width="stretch", key="prune_recordings"):
+                    done = screen_recorder.prune_recordings()
+                    st.toast(f"Freed {done['freed_gb']:.1f} GB.")
+                    st.rerun()
+            else:
+                st.caption(f"Within the retention limit "
+                           f"({screen_recorder.KEEP_DAYS:.0f} days / "
+                           f"{screen_recorder.MAX_GB:.0f} GB).")
+
+            st.divider()
             for r in recs[:12]:
                 mb = r["size"] / (1024 * 1024)
                 st.caption(f"{r['name']} · {mb:.0f} MB · {r['path']}")

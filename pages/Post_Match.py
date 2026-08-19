@@ -132,8 +132,53 @@ if st.button("Save match to library", width="stretch"):
                 video_path=lib_video.strip() or None)
         st.success(f"Saved to library as “{slug}”. Open the Match Library "
                    "page to browse or export it.")
+        st.rerun()
     except Exception as exc:
         st.error(f"Could not archive: {exc}")
+
+st.write("")
+
+# --------------------------------------------------------------------------- #
+# Start the next match
+#
+# The working files describe exactly one match. Without this, a second match
+# appends to the first and the two silently merge — which is what used to
+# happen. Guarded, because it is the only destructive action in the app.
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Start the next match", "NEW MATCH"),
+            unsafe_allow_html=True)
+
+archived = control.is_archived(state)
+unsaved = control.has_unsaved_work(state, events=events)
+
+if archived:
+    st.success("This match is saved to the library — starting a new one is safe.")
+elif unsaved:
+    st.warning("This match has **not** been saved to the library. Starting a new "
+               "match clears the event log, notes and camera stats for good.")
+else:
+    st.caption("Nothing recorded for this match yet.")
+
+nm1, nm2 = st.columns([1, 2.4], vertical_alignment="center")
+keep = nm2.checkbox("Keep team names, lineups and camera feed", value=True,
+                    help="Carries the setup you would otherwise retype every "
+                         "week into the new match.")
+confirm_needed = unsaved and not archived
+if confirm_needed:
+    confirmed = nm2.checkbox("I understand this match will be discarded",
+                            key="new_match_confirm")
+else:
+    confirmed = True
+
+if nm1.button("Start new match", type="primary", width="stretch",
+              disabled=not confirmed):
+    fresh = control.new_match(state, keep_teams=keep, keep_feed=keep)
+    for k in ("report_paths", "share_png", "spotlight"):
+        st.session_state.pop(k, None)
+    st.toast(f"New match started ({fresh['match_id'][:8]}).")
+    st.rerun()
+
+st.caption(f"Current match id: `{state.get('match_id', '')[:8] or '—'}`")
 
 st.write("")
 
