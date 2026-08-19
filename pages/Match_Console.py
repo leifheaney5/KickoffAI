@@ -32,6 +32,10 @@ use_voice = control.uses_voice(state)
 UI.render_match_title(state, events)
 st.write("")
 
+# ---- First run: say what is still needed, then get out of the way ---------- #
+if UI.render_get_started(state):
+    st.write("")
+
 # ---- Live status chips (ingest-aware) ------------------------------------- #
 UI.live_fragment(UI.render_status_chips)
 st.write("")

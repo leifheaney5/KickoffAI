@@ -237,3 +237,92 @@ def test_vision_coverage_handles_a_season_with_no_camera_runs():
     assert cov["measured"] == 0
     assert cov["measured_pct"] == 0
     assert cov["mean_ball_rate"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# First-run readiness (drives the Get started panel)
+# --------------------------------------------------------------------------- #
+def _base_state(**over):
+    import control
+    s = {**control.DEFAULT}
+    s["teams"] = {"home": {"name": "", "lineup": ""},
+                  "away": {"name": "", "lineup": ""}}
+    s["feed"] = dict(control.DEFAULT["feed"])
+    s.update(over)
+    return s
+
+
+def _vision_deps_ok(monkeypatch):
+    """Pretend the vision extras are installed.
+
+    Whether cv2/torch are present is a property of the machine, not of the logic
+    under test — and they are deliberately absent on CI.
+    """
+    import sys
+    import types
+    stub = types.ModuleType("vision_runner")
+    stub.is_supported = lambda: (True, "")
+    monkeypatch.setitem(sys.modules, "vision_runner", stub)
+
+
+def test_setup_state_flags_a_missing_feed_as_blocking(monkeypatch):
+    import control
+    _vision_deps_ok(monkeypatch)
+
+    setup = control.setup_state(_base_state(ingest_mode="vision"))
+
+    assert setup["ready"] is False
+    assert "feed" in {s["key"] for s in setup["outstanding_required"]}
+
+
+def test_setup_state_is_ready_once_the_feed_is_configured(monkeypatch):
+    import control
+    _vision_deps_ok(monkeypatch)
+
+    state = _base_state(ingest_mode="vision")
+    state["feed"]["url"] = "https://veo.example/live/index.m3u8"
+    setup = control.setup_state(state)
+
+    assert setup["ready"] is True
+    # Calibration stays outstanding but must not block the match.
+    assert all(not s["required"] for s in setup["outstanding"])
+
+
+def test_voice_only_does_not_demand_a_camera():
+    """The blocking steps must follow the ingest mode, not assume vision."""
+    import control
+
+    setup = control.setup_state(_base_state(ingest_mode="voice"))
+
+    keys = {s["key"] for s in setup["steps"]}
+    assert "feed" not in keys and "deps" not in keys
+    assert setup["ready"] is True
+
+
+def test_naming_teams_is_advisory_not_blocking():
+    import control
+
+    state = _base_state(ingest_mode="voice")
+    setup = control.setup_state(state)
+    teams = next(s for s in setup["steps"] if s["key"] == "teams")
+
+    assert teams["done"] is False
+    assert teams["required"] is False
+
+    state["teams"] = {"home": {"name": "Eagles", "lineup": ""},
+                      "away": {"name": "Hawks", "lineup": ""}}
+    setup = control.setup_state(state)
+    assert next(s for s in setup["steps"] if s["key"] == "teams")["done"] is True
+
+
+def test_every_step_names_the_page_that_fixes_it(monkeypatch):
+    """A checklist item that doesn't say where to go is not guidance."""
+    import control
+    _vision_deps_ok(monkeypatch)
+
+    for state in (_base_state(ingest_mode="vision"),
+                  _base_state(ingest_mode="voice"),
+                  _base_state(ingest_mode="both")):
+        for step in control.setup_state(state)["steps"]:
+            assert step["page"]
+            assert step["label"]

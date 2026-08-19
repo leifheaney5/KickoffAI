@@ -8,23 +8,15 @@ source matches cited.
 """
 
 import html
-import os
-import sys
 
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import analyst         # noqa: E402
 import brand           # noqa: E402
+import ui_helpers as UI
 import embed           # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Library Analyst",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
-
-st.markdown(brand.page_header("ANALYST", "Library Analyst"),
-            unsafe_allow_html=True)
+UI.page_setup("ANALYST", "Library Analyst")
 st.caption("Ask across every match in your library. Answers are grounded in the "
            "most relevant matches and generated locally — nothing leaves this "
            "machine.")

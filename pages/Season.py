@@ -6,25 +6,17 @@ Cross-match analytics over the whole library: a league table, top scorers, and
 goals-over-time, computed from the matches + mirrored events in the database.
 """
 
-import os
-import sys
 
 import pandas as pd
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
+import ui_helpers as UI
 import auth            # noqa: E402
 import db              # noqa: E402
 import season          # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Season",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
-
-st.markdown(brand.page_header("SEASON", "Season Analytics"),
-            unsafe_allow_html=True)
+UI.page_setup("SEASON", "Season Analytics")
 
 
 @st.cache_data(ttl=10)

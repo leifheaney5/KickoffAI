@@ -9,15 +9,11 @@ ask anything about the match (answered locally by the Ollama model — no cloud)
 
 import html
 import os
-import sys
 
 import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
-
-# Make the project root importable when run as a Streamlit page.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import brand            # noqa: E402
 import control          # noqa: E402
@@ -30,9 +26,7 @@ import ui_helpers as UI  # noqa: E402
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
-st.set_page_config(page_title=f"{brand.NAME} — Insights",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.app_css(), unsafe_allow_html=True)
+UI.page_setup()
 
 HOME, AWAY = brand.HOME, brand.AWAY
 
@@ -86,8 +80,8 @@ else:
 st.write("")
 
 if not events:
-    st.info("No events yet. Narrate the match on the dashboard, then come back "
-            "for momentum and AI analysis.")
+    st.info("No events yet. Start a match on the **Match Console**; momentum "
+            "and the analyst need some events to read.")
     st.stop()
 
 # Camera events feed the momentum curve too, but only as heavily as the run

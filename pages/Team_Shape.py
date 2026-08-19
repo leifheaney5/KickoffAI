@@ -10,20 +10,16 @@ calibration lands, then become true tactical coordinates automatically.
 """
 
 import os
-import sys
 
 import requests
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
+import ui_helpers as UI
 import control         # noqa: E402
 import icons as IC     # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Team Shape",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
+UI.page_setup()
 
 try:
     import numpy as np
@@ -107,8 +103,9 @@ home_lr = c2.toggle("Home attacks L→R", value=True,
                     help="Orientation for territory / thirds.")
 
 if not os.path.exists(stats_path):
-    st.info("No stats file yet. Run the **Video Analysis** page first to "
-            "produce a match_stats.json.")
+    st.info("No camera data yet. Start the Eye from the **Match Console** for "
+            "a live match, or analyse a recording on **Film Room** — either "
+            "produces the match_stats.json this page reads.")
     st.stop()
 
 try:

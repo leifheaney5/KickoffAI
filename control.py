@@ -236,6 +236,104 @@ def has_unsaved_work(state: dict = None, events=None, notes=None) -> bool:
     return bool(events or notes or (state.get("summary") or "").strip())
 
 
+def setup_state(state=None) -> dict:
+    """What is ready for a match, and what is not.
+
+    Pure and Streamlit-free so it can be tested directly. Each step is
+    ``{key, label, done, why, page, required}``; `required` marks the ones
+    without which a match cannot run at all, as opposed to the ones that merely
+    make the results better.
+    """
+    state = load_control() if state is None else state
+    has_feed = feed_ready(state)
+    wants_vision = uses_vision(state)
+    wants_voice = uses_voice(state)
+    teams = state.get("teams", {}) or {}
+    named = bool((teams.get("home", {}).get("name") or "").strip()
+                 and (teams.get("away", {}).get("name") or "").strip())
+
+    vision_ok, vision_why = True, ""
+    if wants_vision:
+        try:
+            import vision_runner
+
+            vision_ok, vision_why = vision_runner.is_supported()
+        except Exception as exc:
+            vision_ok, vision_why = False, str(exc)
+
+    calibrated = False
+    try:
+        from vision import calibration as vcal
+
+        calibrated = bool(vcal.load_calibration())
+    except Exception:
+        pass
+
+    steps = [
+        {"key": "teams", "label": "Name both teams", "done": named,
+         "why": "Reports and the scoreboard read “Home” and “Away” until you do.",
+         "page": "Match Setup", "required": False},
+    ]
+    if wants_vision:
+        steps += [
+            {"key": "deps", "label": "Install the vision dependencies",
+             "done": vision_ok, "why": vision_why or "",
+             "page": "Camera & Feed", "required": True},
+            {"key": "feed", "label": "Point at a camera feed", "done": has_feed,
+             "why": "The Eye has nothing to analyse without one.",
+             "page": "Camera & Feed", "required": True},
+            {"key": "calibration", "label": "Calibrate the pitch",
+             "done": calibrated,
+             "why": "Optional. Without it positions stay in image space and "
+                    "possession is approximate.",
+             "page": "Camera & Feed", "required": False},
+        ]
+    if wants_voice:
+        steps.append(
+            {"key": "mic", "label": "Check the microphone", "done": True,
+             "why": "Run the calibration test on Voice Backup if speech is missed.",
+             "page": "Voice Backup", "required": False})
+
+    required = [s for s in steps if s["required"]]
+    return {
+        "steps": steps,
+        "ready": all(s["done"] for s in required),
+        "outstanding": [s for s in steps if not s["done"]],
+        "outstanding_required": [s for s in required if not s["done"]],
+        "mode": state.get("ingest_mode", "vision"),
+    }
+
+
+def match_phase(state: dict = None, events=None) -> str:
+    """Where this match is in its life: empty | live | halftime | finished |
+    archived.
+
+    Derived rather than stored, so it cannot drift out of step with the clock
+    and the archive flag. `synced` is deliberately *not* here — that is the
+    library's business, and asking the database on every status tick would be
+    wasteful (see ui_helpers.match_chip).
+    """
+    state = load_control() if state is None else state
+    if is_archived(state):
+        return "archived"
+    if events is None:
+        import stats as S
+
+        events = S.load_events()
+    timer = state.get("timer") or {}
+    elapsed = elapsed_seconds(timer)
+
+    if timer.get("running"):
+        return "live"
+    if not events and elapsed <= 0:
+        return "empty"
+    # timer_halftime() parks the clock exactly on the break and flips to the
+    # second half, which is the only way to be stopped at 45:00 in that state.
+    if timer.get("second_half") and abs(elapsed - FIRST_HALF_SECONDS) < 1:
+        return "halftime"
+    return "finished"
+
+
 def mark_archived(state: dict = None) -> dict:
     """Record that this match is now safely in the library."""
     state = load_control() if state is None else state

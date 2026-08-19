@@ -13,28 +13,20 @@ from stats; pending events count until reviewed.
 """
 
 import os
-import sys
 from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
+import ui_helpers as UI
 import audio_ingest    # noqa: E402
 import control          # noqa: E402
 import icons as IC      # noqa: E402
 import stats as S       # noqa: E402
 import timeline_image as TL  # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Timeline",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
-st.markdown(
-    "<style>div[data-testid='stHorizontalBlock']{gap:0!important}</style>",
-    unsafe_allow_html=True,
-)
+UI.page_setup(row_gap="0")
 st.markdown("""
 <style>
 .review-divider { border-top: 1px solid rgba(255,255,255,.12); margin: 10px 0 8px; }
@@ -166,8 +158,9 @@ if pending_count:
 st.caption("  ·  ".join(caption_parts))
 
 if not events:
-    st.info("No events yet. Narrate the match on the dashboard, then come back "
-            "to see the timeline build itself.")
+    st.info("No events yet. Start a match on the **Match Console** — the Eye "
+            "logs passes as it sees them, and voice or **Manual Entry** adds "
+            "the calls it cannot make. The timeline builds itself from there.")
     st.stop()
 
 # Legend

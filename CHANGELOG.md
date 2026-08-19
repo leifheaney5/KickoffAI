@@ -23,6 +23,46 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.15.0] - 2026-08-19
+
+First-run guidance, a visible match lifecycle, and one page convention. Plan:
+`UX_ARCHITECTURE_PLAN.md` (workstreams A1, A2, B1, B2).
+
+### Added
+
+- **A "Get started" panel** on the Match Console, driven by
+  `control.setup_state()` — a pure, testable resolver of what is ready and what
+  is not. It lists only what is outstanding, marks which steps actually block a
+  match, and names the page that fixes each. It disappears once you are ready,
+  so it guides a new coach without nagging a returning one. The Match Console
+  previously had *zero* empty-state handling: a new user landed on a 0-0
+  scoreboard reading "Home" vs "Away" with nothing to tell them what to do.
+- **A match lifecycle chip** in the status bar: Not started / Live / Half time /
+  Finished / Archived, plus whether an archived match has reached the club
+  library. `match_id`, `archived_at` and `sync_state` all existed but surfaced on
+  one page, so "did my match upload?" could only be answered by navigating to
+  Account. The club lookup is cached (15s) so a once-a-second status bar does not
+  query the database sixty times a minute.
+- `ui_helpers.page_setup()` — the single opening every page now uses.
+
+### Changed
+
+- **Every page now opens the same way.** Seven pages still called
+  `st.set_page_config` (illegal under `st.navigation`, tolerated only by luck),
+  eight did not; seven inserted the repo root into `sys.path`, eight did not; the
+  CSS entry point was `global_css()` on half and `app_css()` on the other half.
+  All fifteen now call `UI.page_setup()` and nothing else. Running a page
+  directly is no longer supported — the router owns page config, navigation and
+  the club auth gate, so a direct run would bypass all three.
+- The two ad-hoc column-gap overrides pasted into page bodies are now a
+  documented `page_setup(row_gap=...)` argument, so the same global selector is
+  no longer redefined in two places with different values and no explanation.
+- Empty-state copy corrected across Timeline, Insights, Team Shape and Match
+  Library: they pointed at "the dashboard" and a "Video Analysis" page that has
+  not existed since v1.12.0.
+- `setup_state()` lives in `control.py`, not `ui_helpers.py` — it is pure logic
+  and belongs somewhere CI can import without Streamlit.
+
 ## [1.14.0] - 2026-08-19
 
 Club mode: several coaches, one shared library — plus the correctness fix that

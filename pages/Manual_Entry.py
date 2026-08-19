@@ -14,27 +14,18 @@ Manual entries are marked status="approved" immediately — no review step neede
 since the user is entering them directly.
 """
 
-import os
-import sys
 from datetime import datetime, timezone
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
+import ui_helpers as UI
 import control         # noqa: E402
 import icons as IC     # noqa: E402
 import stats as S      # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Manual Entry",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
-st.markdown(
-    "<style>div[data-testid='stHorizontalBlock']{gap:4px!important}</style>",
-    unsafe_allow_html=True,
-)
+UI.page_setup(row_gap="4px")
 
 # Color quick-action buttons and the Log Event submit button by text label.
 components.html("""

@@ -287,3 +287,45 @@ def test_tracker_online_uses_status_freshness(ctl, monkeypatch):
     assert control.tracker_online({"updated": now - 1}) is True
     assert control.tracker_online({"updated": now - 60}) is False
     assert control.tracker_online({}) is False
+
+
+# --------------------------------------------------------------------------- #
+# Match phase (drives the lifecycle chip)
+# --------------------------------------------------------------------------- #
+def test_match_phase_reads_the_clock_and_archive_flag(ctl):
+    control, stats = ctl
+    state = control.load_control()
+
+    assert control.match_phase(state, events=[]) == "empty"
+
+    control.timer_start(state)
+    assert control.match_phase(state, events=[]) == "live"
+
+    control.timer_pause(state)
+    assert control.match_phase(state, events=[{"action": "goal"}]) == "finished"
+
+    control.timer_halftime(state)
+    assert control.match_phase(state, events=[{"action": "goal"}]) == "halftime"
+
+
+def test_archived_beats_every_other_phase(ctl):
+    control, _ = ctl
+    state = control.load_control()
+    control.timer_start(state)
+    control.save_control(state)
+    control.mark_archived(control.load_control())
+
+    assert control.match_phase(control.load_control()) == "archived"
+
+
+def test_a_new_match_returns_to_empty(ctl):
+    control, stats = ctl
+    state = control.load_control()
+    stats.save_events([{"action": "goal", "team": "Home"}])
+    control.timer_start(state)
+    control.save_control(state)
+    control.mark_archived(control.load_control())
+
+    fresh = control.new_match(control.load_control())
+
+    assert control.match_phase(fresh) == "empty"

@@ -43,6 +43,41 @@ def mic_svg(active: bool) -> str:
     )
 
 
+def page_setup(kicker: str = "", title: str = "", caption: str = "",
+               row_gap: str = None) -> None:
+    """Start a page: design system, then an optional header.
+
+    Every page begins with exactly this and nothing else. It replaces three
+    divergent openings that had grown up side by side — some pages called
+    `st.set_page_config` (illegal under `st.navigation`, tolerated only by
+    luck), some inserted the repo root into `sys.path`, and the CSS entry point
+    was `global_css()` on half of them and `app_css()` on the other half.
+
+    `st.set_page_config` belongs to the router (dashboard.py), which is the only
+    supported entry point — it owns the page config, the navigation and the club
+    auth gate, so running a page directly would bypass all three.
+
+    ``row_gap`` overrides the spacing between columns for pages whose layout
+    depends on it (the timeline's badge rail needs 0; the manual-entry grid
+    needs a hair). Previously each such page pasted its own raw ``<style>`` into
+    the page body, so the same global selector was being redefined ad hoc in two
+    places with different values and no record of why.
+    """
+    st.markdown(brand.app_css(), unsafe_allow_html=True)
+    if row_gap is not None:
+        # Scoped to this page's element tree: st.navigation replaces the tree on
+        # navigation, so it cannot leak into another page.
+        st.markdown(
+            f"<style>div[data-testid='stHorizontalBlock']"
+            f"{{gap:{row_gap}!important}}</style>",
+            unsafe_allow_html=True)
+    if title:
+        st.markdown(brand.page_header(kicker or title.upper(), title),
+                    unsafe_allow_html=True)
+    if caption:
+        st.caption(caption)
+
+
 def eye_svg(active: bool) -> str:
     """The Eye's counterpart to mic_svg — same size, weight and glow language."""
     color = "#34d399" if active else "#5b6e92"
@@ -363,6 +398,87 @@ def voice_chips() -> str:
         f"<span class='kp-heard'>{heard}</span></div>")
 
 
+def render_get_started(state=None) -> bool:
+    """The first-run panel. Returns True when it rendered.
+
+    Shown only while something is outstanding, so it guides a new coach and then
+    gets out of the way — it must never nag someone who is set up.
+    """
+    setup = control.setup_state(state)
+    if not setup["outstanding"]:
+        return False
+
+    st.markdown(brand.section("Get started", "SETUP"), unsafe_allow_html=True)
+    if setup["outstanding_required"]:
+        st.caption("A couple of things are needed before this match can run.")
+    else:
+        st.caption("Ready to go. These are optional, and improve the results.")
+
+    for step in setup["outstanding"]:
+        mark = "○" if step["required"] else "·"
+        tag = "" if step["required"] else "  _(optional)_"
+        st.markdown(f"{mark}  **{step['label']}**{tag} — {step['why']}  \n"
+                    f"&nbsp;&nbsp;&nbsp;&nbsp;→ *{step['page']}*")
+    return True
+
+
+_PHASE_STYLE = {
+    "empty":    ("off", "Not started"),
+    "live":     ("rec", "Live"),
+    "halftime": ("paused", "Half time"),
+    "finished": ("paused", "Finished"),
+    "archived": ("off", "Archived"),
+}
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _sync_state_for(capture_id: str) -> str:
+    """Whether this match has reached the club library.
+
+    Cached: the status bar ticks once a second and this is the only chip that
+    needs the database, so it must not be asked 60 times a minute.
+    """
+    if not capture_id:
+        return ""
+    try:
+        import db
+
+        db.init_db()
+        with db.session() as s:
+            row = (s.query(db.Match)
+                   .filter_by(capture_id=capture_id)
+                   .first())
+            return (row.sync_state or "") if row else ""
+    except Exception:
+        return ""          # no library configured is not an error
+
+
+def match_chip(state=None) -> str:
+    """Where the current match is in its life, and whether it reached the club.
+
+    Previously `match_id`, `archived_at` and `sync_state` all existed but showed
+    up on exactly one page, so "did my match upload?" could only be answered by
+    navigating to Account — the question that matters most on the drive home.
+    """
+    state = control.load_control() if state is None else state
+    phase = control.match_phase(state)
+    dot, label = _PHASE_STYLE.get(phase, ("off", "Not started"))
+
+    chip = (f"<div class='kp-chip'><span class='l'>Match</span>"
+            f"<span class='dot {dot}'></span><span class='v'>{label}</span></div>")
+
+    if phase == "archived":
+        sync = _sync_state_for(state.get("match_id", ""))
+        if sync == "synced":
+            chip += ("<div class='kp-chip'><span class='l'>Club</span>"
+                     "<span class='v'>Synced</span></div>")
+        elif sync in ("local", "pending"):
+            chip += ("<div class='kp-chip'><span class='l'>Club</span>"
+                     "<span class='dot paused'></span>"
+                     "<span class='v'>Not uploaded</span></div>")
+    return chip
+
+
 def render_status_chips():
     """The live status bar, showing only the ingest paths this match uses.
 
@@ -370,12 +486,12 @@ def render_status_chips():
     that said "Offline" while the Eye was happily analysing.
     """
     state = control.load_control()
-    parts = []
+    parts = [match_chip(state)]
     if control.uses_vision(state):
         parts.append(vision_chips())
     if control.uses_voice(state):
         parts.append(voice_chips())
-    if not parts:                       # defensive: an unknown mode
+    if len(parts) == 1:                 # defensive: an unknown mode
         parts.append(voice_chips())
 
     st.markdown(f"<div class='kp-status'>{''.join(parts)}</div>",

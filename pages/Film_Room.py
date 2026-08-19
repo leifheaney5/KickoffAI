@@ -15,18 +15,14 @@ settings live on Camera & Feed.
 """
 
 import os
-import sys
 from collections import deque
 
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
 import control         # noqa: E402
 import screen_recorder  # noqa: E402
-
-st.markdown(brand.global_css(), unsafe_allow_html=True)
+import ui_helpers as UI  # noqa: E402
 
 # Heavy vision deps are optional; fail gracefully with install guidance.
 try:
@@ -42,8 +38,7 @@ except Exception as exc:  # pragma: no cover - import guard
 
 state = control.load_control()
 match_name = (state.get("match_name") or "").strip()
-st.markdown(brand.page_header("FILM ROOM", match_name or "Recorded analysis"),
-            unsafe_allow_html=True)
+UI.page_setup("FILM ROOM", match_name or "Recorded analysis")
 
 if not VISION_OK:
     st.error("Vision dependencies are not installed.")

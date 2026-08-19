@@ -8,22 +8,18 @@ single zip. The DB indexes; files live under library/<slug>/ (see library.py).
 """
 
 import os
-import sys
 from datetime import datetime
 
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import brand           # noqa: E402
+import ui_helpers as UI
 import auth            # noqa: E402
 import db              # noqa: E402
 import embed           # noqa: E402
 import library         # noqa: E402
 
-st.set_page_config(page_title=f"{brand.NAME} — Match Library",
-                   page_icon=brand.LOGO_TRANSPARENT, layout="wide")
-st.markdown(brand.global_css(), unsafe_allow_html=True)
+UI.page_setup()
 
 # Artifact display groups: (heading, the kinds it contains).
 _DOWNLOAD_KINDS = {
@@ -219,9 +215,9 @@ def render_list():
                 st.info("Nothing new to import.")
 
     if not matches:
-        st.info("No matches in the library yet. Finalize a match from the "
-                "dashboard's export panel to archive it here, or import past "
-                "reports above.")
+        st.info("No matches archived yet. Finish a match, then use "
+                "**Post-Match → Save match to library** to archive it here. "
+                "Past reports can also be imported above.")
         return
 
     # Bulk backup: zip the whole library, or a selected subset, into one file.
