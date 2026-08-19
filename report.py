@@ -1212,6 +1212,49 @@ def build_pdf(events, data, summary, clock, path,
         frame(y0)
         pdf.ln(3)
 
+    # ---- Possession quality ------------------------------------------------ #
+    # Raw possession share says who held the ball; these say what they did with
+    # it. Reconstructed from the event stream, so it works on a voice-logged
+    # match today and sharpens as vision adds events.
+    try:
+        from football import possessions as POSS
+        from football.zones import enrich_all
+
+        poss_summary = POSS.summarise(enrich_all(events))
+    except Exception:
+        poss_summary = {}
+
+    if poss_summary:
+        section("Possession Quality")
+        y0 = pdf.get_y()
+        pdf.ln(2)
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(0, 6, _pdf_safe(
+            "How each side used the ball, not just how long they held it."),
+            new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        for side, label in (("Home", "Home"), ("Away", "Away")):
+            row = poss_summary.get(side)
+            if not row:
+                continue
+            pdf.set_x(lm + 4)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*INK)
+            pdf.cell(0, 6, _pdf_safe(label), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_x(lm + 8)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(*MUTED)
+            pdf.cell(0, 5.5, _pdf_safe(
+                f"{row['possessions']} possessions  ·  "
+                f"{row['shot_rate']:.0f}% ended in a shot  ·  "
+                f"{row['passes_per_possession']:.1f} passes each  ·  "
+                f"{row['set_piece_starts']} began from a set piece"),
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(1)
+        frame(y0)
+        pdf.ln(3)
+
     # ---- Momentum graph --------------------------------------------------- #
     if momentum_png and os.path.exists(momentum_png):
         section("Match Momentum")

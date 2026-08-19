@@ -23,6 +23,44 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.21.0] - 2026-08-19
+
+Master plan: the coordinate bridge and the possession engine.
+
+### Added
+
+- **`football/zones.py` — the coordinate bridge.** Spatial analytics need x/y on
+  every event; vision supplies them, the Ear does not. A logged event carries a
+  free-text `location` — and in the real match log it is absent 217 times in 223.
+  This maps a described place to a zone and a zone to its centroid, tagged
+  `zone_estimate` so it is never presented as a measurement.
+
+  It **refuses as carefully as it resolves**. The real log contains "utah, iowa"
+  from a mis-transcription; inventing a pitch position for it would quietly
+  corrupt every spatial metric above. Unrecognised phrases return nothing, and a
+  partial description ("left wing" fixes the channel but not the third) stays
+  marked partial rather than pretending to say more than it did. Vision-measured
+  coordinates are never overwritten.
+
+- **`football/possessions.py` — possession and sequence reconstruction.** Almost
+  every metric worth having (PPDA, field tilt, sequence directness, possessions
+  ending in a shot, high turnovers) is defined over possessions rather than
+  events, so the engine is built before the metrics that need it.
+
+  Deterministic by construction, and explicit about the edge cases where sloppy
+  reconstruction invents or destroys possessions: a tackle hands the ball to the
+  tackler, restarts are labelled as set pieces, unattributed narration joins the
+  possession in progress rather than starting one, and a long silence ends a
+  possession — a coach narrating live misses events, and a four-minute possession
+  is fiction. Sequences split at restarts, since directness measured across a
+  throw-in is meaningless. Classification thresholds are arguments, not magic
+  numbers.
+
+- **A Possession Quality section in the report** — possessions, share ending in a
+  shot, passes each, and how many began from a set piece. Raw possession says who
+  held the ball; this says what they did with it. Runs on a voice-logged match
+  today and sharpens as vision adds events.
+
 ## [1.20.0] - 2026-08-19
 
 Master plan Phase 0 and Phase 1. Plan: `MASTER_PLAN.md`.
