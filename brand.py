@@ -144,6 +144,12 @@ _ROOT = (
     "--shadow:0 10px 30px rgba(0,0,0,.35);"
     f"--font-disp:{FONT_DISPLAY};--font-body:{FONT_SANS};--font-mono:{FONT_MONO};"
     "--gap:16px;--pad:20px;--rowgap:10px;"
+    # Size scale. These exist so the layout can be re-tuned in ONE place for a
+    # narrow screen — the scoreboard used to hard-code a 68px score and a 200px
+    # centre column, which is what broke the layout on a phone. Overridden by
+    # the breakpoints at the end of the stylesheet.
+    "--sb-score:68px;--sb-clock:46px;--sb-team:16px;--sb-center:200px;"
+    "--chip-min:180px;--cmp-label:92px;--scale:1;"
     # Legacy aliases — keep existing code working
     f"--fd:{FONT_DISPLAY};--fm:{FONT_MONO};"
     "--home:#1E7BFF;--away:#DC2626;"
@@ -290,7 +296,7 @@ _CSS_BODY = """
   }
   .kp-chip .l { font-family:var(--font-disp); font-size:.66rem; letter-spacing:.14em; text-transform:uppercase; color:var(--c-muted); font-weight:600; }
   .kp-chip .v { font-weight:700; color:var(--c-text); font-family:var(--font-mono); font-size:12px; }
-  .kp-chip.heard { flex:1; min-width:180px; }
+  .kp-chip.heard { flex:1; min-width:var(--chip-min); }
   .kp-heard { color:var(--c-muted); font-style:italic; font-size:.86rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dot { width:9px; height:9px; border-radius:50%; display:inline-block; flex:none; }
   .dot.rec { background:var(--c-live); animation:recpulse 1.4s infinite; }
@@ -304,13 +310,13 @@ _CSS_BODY = """
   /* ---- Scoreboard ---- */
   .scoreboard { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:24px; padding:calc(var(--pad) + 4px) var(--pad); }
   .sb-side { display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .sb-team { font-family:var(--font-disp); font-weight:600; font-size:16px; letter-spacing:.03em; color:var(--c-muted); }
+  .sb-team { font-family:var(--font-disp); font-weight:600; font-size:var(--sb-team); letter-spacing:.03em; color:var(--c-muted); }
   .sb-home .sb-team { color:var(--c-home2); }
   .sb-away .sb-team { color:#FF6B6B; }
-  .sb-score { font-family:var(--font-mono); font-size:68px; font-weight:600; line-height:1; color:var(--c-text); }
-  .sb-center { display:flex; flex-direction:column; align-items:center; gap:8px; min-width:200px; }
+  .sb-score { font-family:var(--font-mono); font-size:var(--sb-score); font-weight:600; line-height:1; color:var(--c-text); }
+  .sb-center { display:flex; flex-direction:column; align-items:center; gap:8px; min-width:var(--sb-center); }
   .sb-half { font-family:var(--font-mono); font-size:11px; letter-spacing:.22em; color:var(--c-subtle); text-transform:uppercase; }
-  .sb-clock { font-family:var(--font-mono); font-size:46px; font-weight:500; color:var(--c-text); text-shadow:0 0 24px rgba(43,231,255,.25); }
+  .sb-clock { font-family:var(--font-mono); font-size:var(--sb-clock); font-weight:500; color:var(--c-text); text-shadow:0 0 24px rgba(43,231,255,.25); }
   .sb-clock .added { color:var(--c-cyan); font-size:1.3rem; font-weight:500; }
 
   /* ---- Team comparison bars ---- */
@@ -422,6 +428,46 @@ _CSS_BODY = """
   [data-testid="stSidebarCollapsedControl"] button { color:#cfe0ff !important; }
   [data-testid="stSidebarNav"] a span, [data-testid="stSidebarNav"] a { color:var(--c-text) !important; }
   [data-testid="stToolbar"] { background:transparent !important; }
+
+  /* ------------------------------------------------------------------------
+     Responsive.
+
+     The app is used on a laptop and, from the touchline, on a phone. Because
+     the layout-critical sizes are tokens, a breakpoint retunes the whole design
+     by redefining a handful of variables rather than by overriding rules one at
+     a time — which is what makes a narrow view maintainable at all.
+     ------------------------------------------------------------------------ */
+
+  /* Tablet / small laptop */
+  @media (max-width: 900px) {
+    :root {
+      --sb-score:52px; --sb-clock:36px; --sb-center:150px;
+      --pad:16px; --gap:12px; --chip-min:140px;
+    }
+    .scoreboard { gap:14px; }
+  }
+
+  /* Phone — the touchline case. The scoreboard keeps its three columns (a score
+     that wraps is unreadable at a glance) but everything shrinks around it. */
+  @media (max-width: 640px) {
+    :root {
+      --sb-score:40px; --sb-clock:28px; --sb-team:13px; --sb-center:0px;
+      --pad:12px; --gap:10px; --rowgap:8px; --chip-min:0px;
+    }
+    .scoreboard { gap:8px; padding:12px 8px; }
+    .kp-status { gap:6px; }
+    .kp-chip { padding:5px 10px; font-size:11px; }
+    .kp-chip.heard { flex:1 1 100%; }
+    .page-title { font-size:1.25rem; }
+    /* Streamlit columns stack on their own; stop the panels adding to the
+       squeeze once they do. */
+    .panel, .kp-card { padding:12px; }
+  }
+
+  /* Sideline view: a read-only phone surface, so hide the app chrome it can
+     never use and let the frame take the full width. */
+  .kp-sideline [data-testid="stSidebar"] { display:none; }
+  .kp-sideline .block-container { padding-top:.75rem; max-width:100%; }
 """
 
 

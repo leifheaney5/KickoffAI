@@ -52,7 +52,7 @@ from .sources import (
 from .teams import JerseyOCR, TeamClassifier
 from .tracking import IdentityManager
 
-__version__ = "1.16.0"
+__version__ = "1.17.0"
 
 __all__ = [
     "PipelineConfig",

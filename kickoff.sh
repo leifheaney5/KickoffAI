@@ -202,8 +202,30 @@ fi
 yellow "  Press Ctrl+C here to stop everything."
 echo "----------------------------------------------------------------"
 
+# --------------------------------------------------------------------------- #
+# Optional: serve the sideline view to phones on the same wifi.
+#
+# Off by default. Binding beyond localhost is a deliberate choice, so say plainly
+# what it exposes and print the code needed to view it.
+# --------------------------------------------------------------------------- #
+BIND_ADDR="127.0.0.1"
+if [ "${KICKOFF_LAN:-0}" = "1" ]; then
+  BIND_ADDR="0.0.0.0"
+  LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')"
+  if [ -z "${KICKOFF_SIDELINE_CODE:-}" ]; then
+    KICKOFF_SIDELINE_CODE="$(python -c 'import secrets;print(f"{secrets.randbelow(10**6):06d}")')"
+    export KICKOFF_SIDELINE_CODE
+  fi
+  echo "----------------------------------------------------------------"
+  yellow "  LAN mode: this app is reachable by anyone on your network."
+  green  "  Sideline view:  http://${LAN_IP:-<this-machine>}:8501"
+  green  "  Access code:    $KICKOFF_SIDELINE_CODE"
+  echo "----------------------------------------------------------------"
+fi
+
 # Streamlit runs in the foreground; Ctrl+C triggers the trap above.
 KICKOFF_DATA_FILE="$DATA_FILE" streamlit run dashboard.py \
+  --server.address "$BIND_ADDR" \
   --server.headless false --browser.gatherUsageStats false &
 STREAMLIT_PID=$!
 

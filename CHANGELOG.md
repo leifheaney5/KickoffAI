@@ -23,6 +23,39 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.17.0] - 2026-08-19
+
+The touchline release: watch a live match from a phone. Plan:
+`UX_ARCHITECTURE_PLAN.md` (B3, B4, C).
+
+### Added
+
+- **Sideline view (C)** — a read-only page sized for a phone: scoreboard, the
+  Eye's latest frame, and recent events. `KICKOFF_LAN=1` binds Streamlit to the
+  local network (it was localhost-only) and the launcher prints the URL and an
+  access code. Nothing on the page writes, so a phone can never disturb a live
+  capture.
+- **Sideline access control.** Club accounts win where they are in use — a
+  signed-in user needs no code. Without accounts, LAN mode requires a shared
+  code, generated per launch if none is set. Binding to the network was already
+  opt-in, but "anyone on the wifi can watch the match" should be a decision, not
+  a surprise. Verified that no match content renders before the code is
+  supplied.
+
+### Changed
+
+- **Responsive layout (B3).** The scoreboard hard-coded a 68px score and a 200px
+  centre column, which is what broke narrow screens. Layout-critical sizes are
+  now tokens (`--sb-score`, `--sb-clock`, `--sb-center`, `--chip-min`), so the
+  tablet and phone breakpoints retune the whole design by redefining a handful of
+  variables instead of overriding rules one at a time. `brand.py` previously had
+  three `@media` rules in ~500 lines.
+- **Sidebar rule (B4).** Account and the new Sideline view sit in a "You" group —
+  identity and remote viewing are not match-day workflow steps, and padding an
+  existing group with them would have blurred what those groups mean. The rule is
+  written down next to the nav: about four entries per group, and a group earns
+  its place by mapping to a distinct moment in the match day.
+
 ## [1.16.0] - 2026-08-19
 
 Artifacts reach the club library, destructive actions ask first, and the flows

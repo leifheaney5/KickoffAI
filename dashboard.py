@@ -88,10 +88,16 @@ nav = st.navigation(
             st.Page("pages/Analyst.py", title="Analyst",
                     icon=":material/auto_awesome:"),
         ],
-        "Club": [
+        # Identity and remote viewing — not workflow steps, which is why they sit
+        # apart from the match-day groups above rather than padding one of them.
+        # Rule of thumb for this nav: about four entries per group, and a group
+        # earns its place only by mapping to a distinct moment in the match day.
+        "You": [
             st.Page("pages/Account.py",
                     title=(_me["display_name"] if _me else "Account"),
                     icon=":material/account_circle:"),
+            st.Page("pages/Sideline.py", title="Sideline view",
+                    icon=":material/smartphone:"),
         ],
     }
 )

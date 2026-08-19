@@ -85,6 +85,19 @@ Save match to library**, then **Start new match** — that clears the event log,
 notes and camera stats and mints a fresh match id, keeping your team names,
 lineups and camera feed. It warns before discarding anything unarchived.
 
+## Sideline view (watch from the touchline)
+
+A coach during a match is on the touchline, not at a laptop. Launch with
+`KICKOFF_LAN=1 ./kickoff.sh` and the app also serves to your local network; the
+launcher prints the URL and an access code. Open it on a phone and the
+**Sideline** page shows the scoreboard, the Eye's latest frame and recent events.
+
+It is **read-only** — nothing on it can write, so a phone can never disturb a
+live capture. Access is gated: with club accounts in use you sign in as normal;
+without them, LAN mode requires the printed code. Binding to the network is
+opt-in, and "anyone on the wifi can watch" should be a decision rather than a
+surprise.
+
 ## Club mode (several coaches, one library)
 
 Optional, and off until you turn it on. With no accounts, Kickoff Pulse behaves
@@ -244,6 +257,8 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 | `KICKOFF_SHARED_LIBRARY_ROOT` | unset | Where club artifacts (reports, stats) are copied |
 | `KICKOFF_SYNC_VIDEO` | `0` | Include match video in a club sync (large) |
 | `KICKOFF_SYNC_MEDIA_MAX_MB` | `512` | Skip any single artifact larger than this |
+| `KICKOFF_LAN` | `0` | Serve to the local network so phones can open the Sideline view |
+| `KICKOFF_SIDELINE_CODE` | generated | Access code for the Sideline view in LAN mode |
 | `KICKOFF_SESSION_FILE` | `~/.kickoff_session.json` | Where this machine remembers a sign-in |
 | `KICKOFF_PG_PASSWORD` | `kickoff` | Postgres password — **must** be set if you bind beyond localhost |
 | `KICKOFF_PG_BIND` | `127.0.0.1` | Postgres bind address; `0.0.0.0` serves a club LAN |

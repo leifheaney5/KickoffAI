@@ -273,6 +273,53 @@ def end_session() -> None:
 # --------------------------------------------------------------------------- #
 # Authorisation
 # --------------------------------------------------------------------------- #
+def lan_enabled() -> bool:
+    """True when the app is bound to the local network rather than localhost."""
+    return os.environ.get("KICKOFF_LAN", "0") in ("1", "true", "yes")
+
+
+def sideline_code() -> str:
+    """The access code for the read-only sideline view.
+
+    Deliberately required whenever the app is reachable on the LAN and club
+    accounts are *not* in use. Binding to the network is already an explicit
+    opt-in, but "anyone on the wifi can watch the match" is a surprise rather
+    than a choice — a shared code makes it a decision. Set KICKOFF_SIDELINE_CODE
+    to something memorable; unset means one is generated per launch and printed
+    by the launcher.
+    """
+    code = os.environ.get("KICKOFF_SIDELINE_CODE", "").strip()
+    if code:
+        return code
+    if not lan_enabled():
+        return ""          # localhost-only: nothing to protect against
+    # Per-launch code, stable for the life of the process.
+    global _EPHEMERAL_CODE
+    if _EPHEMERAL_CODE is None:
+        _EPHEMERAL_CODE = f"{secrets.randbelow(10 ** 6):06d}"
+    return _EPHEMERAL_CODE
+
+
+_EPHEMERAL_CODE = None
+
+
+def sideline_allowed(supplied: str = None) -> tuple[bool, str]:
+    """(ok, why) for access to the sideline view.
+
+    Club mode wins where it is on: a signed-in user needs no code. Otherwise a
+    LAN-bound app requires the shared code, and a localhost-only app requires
+    nothing.
+    """
+    if auth_enabled():
+        return (True, "") if current_user() else (False, "Sign in to view.")
+    required = sideline_code()
+    if not required:
+        return True, ""
+    if supplied and hmac.compare_digest(str(supplied).strip(), required):
+        return True, ""
+    return False, "This view needs the access code shown when the app started."
+
+
 def is_admin(user: dict) -> bool:
     return bool(user) and user.get("role") == "admin"
 

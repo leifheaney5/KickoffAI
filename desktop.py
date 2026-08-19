@@ -34,6 +34,12 @@ from pathlib import Path
 import webview
 
 ROOT = Path(__file__).resolve().parent
+
+# Localhost by default. KICKOFF_LAN=1 binds to every interface so a phone on the
+# same wifi can open the read-only Sideline view; the window itself still loads
+# over 127.0.0.1. Deliberately opt-in — see auth.sideline_allowed().
+LAN = os.environ.get("KICKOFF_LAN", "0") in ("1", "true", "yes")
+BIND = "0.0.0.0" if LAN else "127.0.0.1"
 HOST = "127.0.0.1"
 STARTUP_TIMEOUT = float(os.environ.get("KICKOFF_STARTUP_TIMEOUT", "45"))
 
@@ -154,7 +160,7 @@ def main() -> int:
             "--server.headless",
             "true",
             "--server.address",
-            HOST,
+            BIND,
             "--server.port",
             str(PORT),
             "--browser.gatherUsageStats",
@@ -179,6 +185,19 @@ def main() -> int:
         return 1
 
     print(f"[desktop] dashboard ready at {URL}", flush=True)
+    if LAN:
+        import socket as _s
+        try:
+            probe = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+            probe.close()
+        except OSError:
+            lan_ip = "<this-machine>"
+        import auth
+        print(f"[desktop] LAN mode: sideline view at http://{lan_ip}:{PORT}",
+              flush=True)
+        print(f"[desktop] access code: {auth.sideline_code()}", flush=True)
     webview.create_window(
         "Kickoff Pulse",
         URL,

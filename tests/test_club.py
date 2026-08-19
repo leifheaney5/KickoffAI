@@ -481,3 +481,60 @@ def test_media_sync_is_off_without_a_shared_root(club, monkeypatch, tmp_path):
 
     assert res["pushed"] == 1
     assert res["results"][0]["media"]["copied"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Sideline view access
+#
+# The sideline view is the one surface reachable from outside the machine, so
+# who can open it is asserted directly.
+# --------------------------------------------------------------------------- #
+def test_localhost_only_needs_no_code(club, monkeypatch):
+    """Bound to 127.0.0.1 there is nobody to keep out."""
+    _, _, auth, _, _ = club
+    monkeypatch.delenv("KICKOFF_LAN", raising=False)
+    monkeypatch.delenv("KICKOFF_SIDELINE_CODE", raising=False)
+
+    assert auth.lan_enabled() is False
+    assert auth.sideline_code() == ""
+    assert auth.sideline_allowed()[0] is True
+
+
+def test_lan_mode_requires_a_code(club, monkeypatch):
+    """Binding to the wifi should be a decision, not a surprise."""
+    _, _, auth, _, _ = club
+    monkeypatch.setenv("KICKOFF_LAN", "1")
+    monkeypatch.setenv("KICKOFF_SIDELINE_CODE", "match-day")
+
+    ok, why = auth.sideline_allowed()
+    assert ok is False and "code" in why.lower()
+    assert auth.sideline_allowed("wrong")[0] is False
+    assert auth.sideline_allowed("match-day")[0] is True
+
+
+def test_lan_mode_generates_a_code_when_none_is_set(club, monkeypatch):
+    """Never silently open: an unset code becomes a generated one."""
+    _, _, auth, _, _ = club
+    monkeypatch.setenv("KICKOFF_LAN", "1")
+    monkeypatch.delenv("KICKOFF_SIDELINE_CODE", raising=False)
+    monkeypatch.setattr(auth, "_EPHEMERAL_CODE", None)
+
+    code = auth.sideline_code()
+    assert len(code) == 6 and code.isdigit()
+    assert auth.sideline_code() == code          # stable for the process
+    assert auth.sideline_allowed(code)[0] is True
+    assert auth.sideline_allowed("000000" if code != "000000" else "111111")[0] is False
+
+
+def test_club_mode_supersedes_the_code(club, monkeypatch):
+    """With accounts in use, sign-in is the gate — not a shared secret."""
+    _, _, auth, _, _ = club
+    monkeypatch.setenv("KICKOFF_LAN", "1")
+    monkeypatch.setenv("KICKOFF_SIDELINE_CODE", "match-day")
+    user = auth.create_user("leif", "a-good-password")
+
+    ok, why = auth.sideline_allowed("match-day")
+    assert ok is False and "sign in" in why.lower()   # a code is not enough
+
+    auth.start_session(user)
+    assert auth.sideline_allowed()[0] is True         # signed in needs no code
