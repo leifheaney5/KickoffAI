@@ -41,7 +41,7 @@ AREAS = {
     "penalty_box":  (91.5, 50.0),
     "six_yard_box": (96.5, 50.0),
     "penalty_spot": (88.0, 50.0),
-    "zone_14":      (78.0, 50.0),   # central, just outside the box
+    "zone_14":      (84.3, 50.0),   # central, at the penalty-area edge (~16.5 m)
     "own_box":      (8.5, 50.0),
     "halfway":      (50.0, 50.0),
 }

@@ -1212,6 +1212,55 @@ def build_pdf(events, data, summary, clock, path,
         frame(y0)
         pdf.ln(3)
 
+    # ---- Expected goals ----------------------------------------------------- #
+    # A published geometric model, printed with its own caveat. It is a way of
+    # comparing chances, not a claim about how many goals should have been
+    # scored, and the report says so rather than leaving the reader to assume.
+    try:
+        from analytics.derived_metrics import match_summary as _derived
+
+        derived = _derived(events)
+    except Exception:
+        derived = {}
+
+    xg_home = (derived.get("Home") or {}).get("expected_goals") or {}
+    xg_away = (derived.get("Away") or {}).get("expected_goals") or {}
+    if xg_home.get("shots") or xg_away.get("shots"):
+        section("Expected Goals")
+        y0 = pdf.get_y()
+        pdf.ln(2)
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(*INK)
+        pdf.cell(0, 7, _pdf_safe(
+            f"Home {xg_home.get('xg', 0):.2f}    -    "
+            f"Away {xg_away.get('xg', 0):.2f}"),
+            new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_x(lm + 4)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(*MUTED)
+        pdf.multi_cell(epw - 8, 4.6, _pdf_safe(
+            f"From {xg_home.get('shots', 0)} and {xg_away.get('shots', 0)} "
+            f"attempts, using {xg_home.get('model', 'the model')}. This is a "
+            f"model, not a measurement: a way of comparing the quality of "
+            f"chances, not the number of goals that should have been scored."))
+        weakest = xg_home.get("provenance") or xg_away.get("provenance")
+        if weakest == "no_geometry":
+            pdf.set_x(lm + 4)
+            pdf.multi_cell(epw - 8, 4.6, _pdf_safe(
+                "Most attempts were logged without a location, so these totals "
+                "rest on an average conversion rate rather than on where each "
+                "shot was taken. Saying where a shot came from would sharpen "
+                "this considerably."))
+        elif weakest == "zone_estimate":
+            pdf.set_x(lm + 4)
+            pdf.multi_cell(epw - 8, 4.6, _pdf_safe(
+                "Shot positions came from described zones, so these are "
+                "accurate to a zone rather than to a metre."))
+        pdf.ln(1)
+        frame(y0)
+        pdf.ln(3)
+
     # ---- Possession quality ------------------------------------------------ #
     # Raw possession share says who held the ball; these say what they did with
     # it. Reconstructed from the event stream, so it works on a voice-logged

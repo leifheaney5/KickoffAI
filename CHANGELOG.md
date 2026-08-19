@@ -23,6 +23,49 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.22.0] - 2026-08-19
+
+Master plan Phase 2: the taxonomy, expected goals, and derived metrics.
+
+### Added
+
+- **`football/taxonomy.py`** — one place that says what an event *is*. The
+  vocabulary grew from **13 actions to 44**, with optional qualifiers (body part,
+  play pattern, shot outcome, big chance, under pressure) held as a flat mapping
+  so a new qualifier never needs a schema migration. Synonyms collapse in tested
+  code rather than in a prompt: a model says "shoots", "strike" and "effort" on
+  different days and all three mean one thing. **Absent means unknown, never
+  zero** — a coach who narrates plainly still gets exactly the stats they always
+  got.
+
+- **`models/xg.py` — expected goals, published rather than fitted.** A
+  transparent geometric model whose every coefficient is written in the source,
+  printed in the report, and open to argument. Labelled a *model*, never a
+  measurement. Importing a professional xG surface would be confidently wrong on
+  under-14s in a direction nobody could see; this one is meant to be refit
+  against our own shots as volume grows.
+
+  The first coefficients were **wrong and caught by testing**: they gave a
+  central penalty-box shot 0.70 xG, a penalty-level number. Re-solved against
+  published open-data baselines (~0.45 at six metres, 0.20 at eleven, 0.08 at the
+  area edge), with the intercept lifted for youth goalkeeping. Those baselines
+  are now pinned by tests. The `zone_14` centroid was also 23 m from goal when
+  the penalty-area edge is 16.5 m.
+
+- **`analytics/derived_metrics.py`** — PPDA with its numerator, denominator and
+  zone all exposed, field tilt, final-third and box entries, and high turnovers.
+
+- **Expected Goals and Possession Quality sections in the report**, each stating
+  how far it can be trusted.
+
+### Changed
+
+- **Derived metrics refuse to report a number they cannot support.** Running
+  against the real match log surfaced two ways of lying by arithmetic: PPDA of
+  `0.0` from zero opponent passes reads as the most aggressive press ever
+  recorded, and a field tilt of `100%` came from a single located event. Both now
+  return nothing, with the reason given, below an evidence floor.
+
 ## [1.21.0] - 2026-08-19
 
 Master plan: the coordinate bridge and the possession engine.
