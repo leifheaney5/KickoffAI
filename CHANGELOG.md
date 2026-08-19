@@ -23,6 +23,60 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.14.0] - 2026-08-19
+
+Club mode: several coaches, one shared library — plus the correctness fix that
+made it possible. Plan: `CLUB_PLAN.md`.
+
+### Fixed
+
+- **Consecutive matches silently merged into one log.** Nothing ever cleared the
+  working files: `finalize_match()` archived to the library and `archive=True`
+  only *copied* `match_data.json`, so a second match appended to the first. The
+  working log in this repo held two separate days of football. Matches now carry
+  a `match_id`, and **Post-Match → Start new match** clears the event log, notes
+  and camera stats, guarded against discarding anything unarchived.
+- Writing a match owner raised on flush — user ids cross JSON as strings while
+  the column is UUID-typed. `auth.as_uuid()` now guards every id write. Caught by
+  an end-to-end club test, not by unit tests.
+
+### Added
+
+- **`auth.py`** — opt-in sign-in for a shared install. Passwords are PBKDF2-
+  HMAC-SHA256 with a per-user salt at 600k iterations; session tokens are 256-bit
+  and stored only as a SHA-256 fingerprint, so reading the session file does not
+  yield a usable session (file mode 0600). Unknown users cost exactly one PBKDF2
+  verify, matching a wrong password, so login cannot be used to enumerate
+  accounts. **With no accounts defined the app is unrestricted** — a single-coach
+  install never sees a login screen.
+- **`users`, `teams`, `team_members`** plus `matches.owner_id` / `team_id`. The
+  library and season are scoped to what the signed-in user may see; matches
+  archived before club mode stay visible to everyone rather than vanishing.
+- **`sync.py`** — offline-tolerant push of local matches to the club server.
+  Capture never depends on the network: matches archive locally and push when
+  reachable. Idempotent by `capture_id`, so a retry over a flaky connection can
+  never duplicate a match; colliding slugs are disambiguated, not dropped.
+- **Account page** — sign in, change password, manage people and teams, and run
+  club sync, with the server URL shown password-redacted.
+- **Recordings retention** (`prune_recordings`, `disk_usage`). Recordings had
+  grown to 6.2 GB with nothing ever deleting them, and a full disk ends a live
+  capture. Surfaced on Voice Backup with a free-space warning.
+- **`requirements.lock`** pinning the verified environment, so a match-day
+  rebuild cannot pick up a breaking upstream release.
+- **`tests/test_control.py`** (20 tests) over the match clock, persistence,
+  corrupt-file fallback and the match lifecycle — `control.py` was the most
+  safety-critical untested module in the repo. Plus `tests/test_club.py` (28)
+  covering the auth and sync properties above.
+
+### Changed
+
+- Postgres credentials and bind address are environment-driven
+  (`KICKOFF_PG_USER` / `KICKOFF_PG_PASSWORD` / `KICKOFF_PG_BIND`). The port stays
+  localhost-only by default; serving a club LAN now requires deliberately
+  setting both, and the README says so.
+- `finalize_match()` marks the match archived and records its `capture_id`, so
+  starting a new match is safe and a later sync is idempotent.
+
 ## [1.13.0] - 2026-08-19
 
 Vision/audio fusion behind an honest trust gate. The Eye's numbers now reach the

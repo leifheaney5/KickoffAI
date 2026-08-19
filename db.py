@@ -26,8 +26,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import (BigInteger, Date, DateTime, Float, ForeignKey, Integer,
-                        String, Text, Uuid, create_engine)
+from sqlalchemy import (BigInteger, Boolean, Date, DateTime, Float, ForeignKey,
+                        Integer, String, Text, Uuid, create_engine)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, mapped_column,
                             relationship, sessionmaker)
 
@@ -46,6 +46,63 @@ def _utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class User(Base):
+    """A person who uses Kickoff Pulse.
+
+    Passwords are stored only as a PBKDF2-HMAC-SHA256 hash with a per-user salt
+    (see auth.py) — never in plaintext and never reversibly encrypted.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True,
+                                          default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+    password_hash: Mapped[str] = mapped_column(String(255), default="")
+    # "admin" can manage users and teams; "coach" captures and reads.
+    role: Mapped[str] = mapped_column(String(16), default="coach")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                 default=_utcnow)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"<User {self.username!r} {self.role}>"
+
+
+class Team(Base):
+    """A club side. Matches belong to a team so the library can be scoped."""
+
+    __tablename__ = "teams"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True,
+                                          default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
+                                                 default=_utcnow)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"<Team {self.slug!r}>"
+
+
+class TeamMember(Base):
+    """Which users can see which teams' matches."""
+
+    __tablename__ = "team_members"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="coach")
 
 
 class Match(Base):
@@ -76,6 +133,25 @@ class Match(Base):
     vision_home_possession: Mapped[float] = mapped_column(Float, default=0.0)
     vision_away_possession: Mapped[float] = mapped_column(Float, default=0.0)
     vision_passes: Mapped[int] = mapped_column(Integer, default=0)
+
+    # --- Ownership -------------------------------------------------------- #
+    # Who captured this match, and which side it belongs to. Both nullable:
+    # matches archived before users existed have neither, and a single-coach
+    # install never needs them.
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    team_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("teams.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # --- Sync ------------------------------------------------------------- #
+    # The capture machine's own id for this match (control.json's match_id).
+    # Carried so a push can be idempotent: the same capture can never create two
+    # rows on the shared server, however many times it is retried.
+    capture_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    # local | pending | synced — see sync.py.
+    sync_state: Mapped[str] = mapped_column(String(16), default="local")
+    synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                  default=_utcnow)
@@ -177,6 +253,13 @@ _ADDED_COLUMNS = [
     ("matches", "vision_home_possession", "FLOAT", "0"),
     ("matches", "vision_away_possession", "FLOAT", "0"),
     ("matches", "vision_passes", "INTEGER", "0"),
+    # Ownership + sync. All nullable/empty by default, so every match archived
+    # before the club features existed stays valid and simply has no owner.
+    ("matches", "owner_id", "CHAR(32)", "NULL"),
+    ("matches", "team_id", "CHAR(32)", "NULL"),
+    ("matches", "capture_id", "VARCHAR(64)", "''"),
+    ("matches", "sync_state", "VARCHAR(16)", "'local'"),
+    ("matches", "synced_at", "TIMESTAMP", "NULL"),
 ]
 
 

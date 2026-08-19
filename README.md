@@ -78,6 +78,35 @@ Switch **Ingest mode** on Camera & Feed:
 
 Override for a single launch with `KICKOFF_INGEST=both ./kickoff.sh`.
 
+### Starting the next match
+
+The working files describe exactly one match. When you're done, **Post-Match →
+Save match to library**, then **Start new match** — that clears the event log,
+notes and camera stats and mints a fresh match id, keeping your team names,
+lineups and camera feed. It warns before discarding anything unarchived.
+
+## Club mode (several coaches, one library)
+
+Optional, and off until you turn it on. With no accounts, Kickoff Pulse behaves
+exactly as a single-coach app and never asks you to sign in.
+
+1. **Account → Create administrator account.** This enables sign-in for everyone
+   using the install and makes you the admin.
+2. Add coaches and teams under **Account** (admin only). Matches are stamped with
+   whoever captured them; the library and season are scoped to what you can see.
+3. To share a library, run Postgres on a club machine and point each laptop at
+   it with `KICKOFF_SHARED_DB_URL`.
+
+Capture never depends on the server. Matches archive to the laptop first and push
+when there's a connection — **Account → Club sync**. A pitch with no signal is
+the normal case, not an error.
+
+> **Security scope.** Sign-in is intended for a self-hosted club server on a
+> trusted network. It is *not* hardened for exposure to the open internet — that
+> needs TLS, rate limiting and a security review. If you bind Postgres beyond
+> localhost (`KICKOFF_PG_BIND`), you **must** set `KICKOFF_PG_PASSWORD`; the
+> default credentials are only safe because the port is localhost-only.
+
 ## What to say
 
 Speak natural play-by-play, one event per breath, e.g.:
@@ -177,6 +206,9 @@ A third page turns the event log into analysis:
 | `icons.py`         | Shared event categories, colours, and SVG icon badges |
 | `timeline_image.py`| Renders the timeline PNG (for export + PDF embed) |
 | `report.py`        | Compiles the data into `.txt` + `.pdf` reports |
+| `quality.py`       | Trust gate: grades each camera run measured/indicative/unusable |
+| `auth.py`          | Club sign-in: password hashing, sessions, visibility scoping |
+| `sync.py`          | Offline-tolerant push of local matches to the club library |
 | `kickoff.sh`       | One-button launcher with clean shutdown |
 | `requirements.txt` | Python dependencies |
 
@@ -206,6 +238,12 @@ python report.py    # writes reports/match_report_<timestamp>.{txt,pdf}
 | `KICKOFF_RECORD_DIR` | `recordings` | Where screen recordings are saved |
 | `KICKOFF_RECORDER_FILE` | `recorder.json` | Screen recorder runtime state |
 | `KICKOFF_VISION_STATE_FILE` | `vision_runner.json` | Vision runner (the Eye) runtime state |
+| `KICKOFF_RECORDINGS_KEEP_DAYS` | `30` | Delete recordings older than this (0 = never) |
+| `KICKOFF_RECORDINGS_MAX_GB` | `20` | Cap the recordings directory, oldest first (0 = no cap) |
+| `KICKOFF_SHARED_DB_URL` | unset | Club server Postgres; unset = local library only |
+| `KICKOFF_SESSION_FILE` | `~/.kickoff_session.json` | Where this machine remembers a sign-in |
+| `KICKOFF_PG_PASSWORD` | `kickoff` | Postgres password — **must** be set if you bind beyond localhost |
+| `KICKOFF_PG_BIND` | `127.0.0.1` | Postgres bind address; `0.0.0.0` serves a club LAN |
 | `KICKOFF_INGEST` | from `control.json` | Override ingest mode: `vision`, `both`, or `voice` |
 | `KICKOFF_MIC` | system default | Mic index or name substring for narration + screen capture audio |
 

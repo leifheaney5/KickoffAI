@@ -21,6 +21,25 @@ if not st.session_state.get("kp_splash_seen"):
     st.markdown(brand.loading_splash(), unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
+# Club mode gate.
+#
+# Authentication is opt-in: with no accounts defined the app is unrestricted and
+# a single coach never sees a login screen. Once a club creates its first
+# account, everything but Account requires signing in.
+# --------------------------------------------------------------------------- #
+try:
+    import auth
+    _auth_on = auth.auth_enabled()
+    _me = auth.current_user() if _auth_on else None
+except Exception:
+    _auth_on, _me = False, None
+
+if _auth_on and not _me:
+    st.navigation([st.Page("pages/Account.py", title="Sign in",
+                           icon=":material/login:")]).run()
+    st.stop()
+
+# --------------------------------------------------------------------------- #
 # Grouped navigation — lifecycle-ordered, vision-first:
 #   Set up  →  Live  →  Analysis  →  After match
 #
@@ -68,6 +87,11 @@ nav = st.navigation(
                     icon=":material/leaderboard:"),
             st.Page("pages/Analyst.py", title="Analyst",
                     icon=":material/auto_awesome:"),
+        ],
+        "Club": [
+            st.Page("pages/Account.py",
+                    title=(_me["display_name"] if _me else "Account"),
+                    icon=":material/account_circle:"),
         ],
     }
 )

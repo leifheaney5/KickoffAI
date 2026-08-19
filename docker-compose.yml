@@ -20,15 +20,21 @@ services:
     container_name: kickoff-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: kickoff
-      POSTGRES_PASSWORD: kickoff
-      POSTGRES_DB: kickoff
+      POSTGRES_USER: "${KICKOFF_PG_USER:-kickoff}"
+      # Default kept for a single-machine install, where the port below is bound
+      # to localhost and nothing else can reach it. A club server that binds to
+      # the LAN MUST set a real password in .env — see KICKOFF_PG_BIND.
+      POSTGRES_PASSWORD: "${KICKOFF_PG_PASSWORD:-kickoff}"
+      POSTGRES_DB: "${KICKOFF_PG_DB:-kickoff}"
     ports:
-      - "127.0.0.1:5432:5432"
+      # localhost-only by default. To serve a club, set KICKOFF_PG_BIND=0.0.0.0
+      # in .env *and* set KICKOFF_PG_PASSWORD to something real — exposing this
+      # port with the default password puts your match data on the network.
+      - "${KICKOFF_PG_BIND:-127.0.0.1}:5432:5432"
     volumes:
       - kickoff_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kickoff -d kickoff"]
+      test: ["CMD-SHELL", "pg_isready -U ${KICKOFF_PG_USER:-kickoff} -d ${KICKOFF_PG_DB:-kickoff}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -57,9 +63,9 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_DB: kickoff
-      POSTGRES_USER: kickoff
-      POSTGRES_PASSWORD: kickoff
+      POSTGRES_DB: "${KICKOFF_PG_DB:-kickoff}"
+      POSTGRES_USER: "${KICKOFF_PG_USER:-kickoff}"
+      POSTGRES_PASSWORD: "${KICKOFF_PG_PASSWORD:-kickoff}"
       SCHEDULE: "0 3 * * *"
       BACKUP_ON_START: "TRUE"
       BACKUP_KEEP_DAYS: "14"

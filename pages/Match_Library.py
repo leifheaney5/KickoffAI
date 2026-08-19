@@ -16,6 +16,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import brand           # noqa: E402
+import auth            # noqa: E402
 import db              # noqa: E402
 import embed           # noqa: E402
 import library         # noqa: E402
@@ -42,11 +43,16 @@ _IMAGE_KINDS = {"timeline_png", "image"}
 def load_matches():
     db.init_db()
     out = []
+    viewer = auth.current_user()
     with db.session() as s:
         rows = (s.query(db.Match)
                 .order_by(db.Match.played_on.desc(), db.Match.created_at.desc())
                 .all())
         for m in rows:
+            # Scope the library to what this user may see. Unowned matches
+            # (archived before club mode) stay visible to everyone.
+            if not auth.can_view_match(viewer, m):
+                continue
             out.append({
                 "id": str(m.id), "slug": m.slug, "name": m.name,
                 "competition": getattr(m, "competition", "") or "",
@@ -62,7 +68,7 @@ def load_detail(slug):
     db.init_db()
     with db.session() as s:
         m = s.query(db.Match).filter_by(slug=slug).first()
-        if m is None:
+        if m is None or not auth.can_view_match(auth.current_user(), m):
             return None
         return {
             "slug": m.slug, "name": m.name, "played_on": m.played_on,

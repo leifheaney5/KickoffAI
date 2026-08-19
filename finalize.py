@@ -107,6 +107,19 @@ def finalize_match(events=None, state=None, notes=None, clock: str = "",
                 home["Goals"], away["Goals"], state.get("summary", ""),
                 competition=competition)
 
+            # Ownership + sync identity. `capture_id` is this machine's id for
+            # the match, so a later push to a shared server is idempotent: the
+            # same capture can never create two rows however often it retries.
+            match.capture_id = state.get("match_id", "") or ""
+            try:
+                import auth
+                who = auth.current_user()
+                if who:
+                    # Ids cross JSON as strings; the column is UUID-typed.
+                    match.owner_id = auth.as_uuid(who["id"])
+            except Exception:
+                pass          # auth is optional; a solo install has no users
+
             for key, (kind, label) in _REPORT_ARTIFACTS.items():
                 p = paths.get(key)
                 if p:

@@ -15,6 +15,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import brand           # noqa: E402
+import auth            # noqa: E402
 import db              # noqa: E402
 import season          # noqa: E402
 
@@ -27,12 +28,20 @@ st.markdown(brand.page_header("SEASON", "Season Analytics"),
 
 
 @st.cache_data(ttl=10)
-def load_season():
-    """Pull matches + goal events (with real team names) from the DB."""
+def load_season(_viewer_id=None):
+    """Pull matches + goal events (with real team names) from the DB.
+
+    Scoped to what the signed-in user may see. `_viewer_id` is part of the cache
+    key (the leading underscore keeps Streamlit from hashing it as data) so two
+    users on one machine never see each other's cached library.
+    """
     db.init_db()
     matches, goals, timeline = [], [], []
+    viewer = auth.current_user()
     with db.session() as s:
         for m in s.query(db.Match).order_by(db.Match.played_on).all():
+            if not auth.can_view_match(viewer, m):
+                continue
             matches.append({
                 "name": m.name, "competition": m.competition or "",
                 "played_on": m.played_on, "home_team": m.home_team,
@@ -57,7 +66,8 @@ def load_season():
     return matches, goals, timeline
 
 
-matches, goals, timeline = load_season()
+me = auth.current_user()
+matches, goals, timeline = load_season(me["id"] if me else None)
 
 if not matches:
     st.info("No matches in the library yet. Archive matches from the dashboard "
