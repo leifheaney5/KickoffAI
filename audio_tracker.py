@@ -346,6 +346,26 @@ class Transcriber:
 # --------------------------------------------------------------------------- #
 # The Brain — Ollama intent parsing
 # --------------------------------------------------------------------------- #
+def _prompt_actions() -> str:
+    """The action vocabulary, read from the taxonomy rather than duplicated.
+
+    The prompt used to hard-code thirteen actions while the analytics understood
+    forty-four, so the Ear could not produce most of what the app could measure.
+    Generating the list here means the two can never drift apart again.
+    """
+    from football.taxonomy import (CARRYING, DEFENDING, DISCIPLINE,
+                                   GOALKEEPING, PASSING, RESTARTS, SHOOTING,
+                                   SQUAD)
+
+    groups = [("shooting", SHOOTING), ("passing", PASSING),
+              ("carrying", CARRYING), ("defending", DEFENDING),
+              ("goalkeeping", GOALKEEPING), ("discipline", DISCIPLINE),
+              ("restarts", RESTARTS), ("squad", SQUAD)]
+    return "\n".join(
+        f"      {label}: " + ", ".join(sorted(actions))
+        for label, actions in groups)
+
+
 SYSTEM_PROMPT = """You are a soccer (football) match data formatter. You do NOT \
 chat. You receive a short spoken phrase from a live commentator and convert it \
 into a single structured event.
@@ -353,14 +373,23 @@ into a single structured event.
 Return ONLY a JSON object with EXACTLY these keys:
   "team":     "Home" or "Away" (or null if not stated)
   "player":   the player's name or number as spoken, else null
-  "action":   one of: pass, shot, tackle, foul, goal, save, cross, dribble, \
-card, corner, offside, interception, clearance, substitution (or null)
+  "action":   one of the actions listed below (or null)
   "result":   the outcome, e.g. complete, incomplete, missed, blocked, on target, \
 scored, saved, won, lost; for a card it MUST be "yellow" or "red" (or null)
-  "location": where on the pitch, e.g. "left wing", "midfield", "penalty box" (or null)
+  "location": where on the pitch (or null). Be specific when the phrase is: \
+"box", "edge of the box", "six yard box", "left wing", "midfield", "final third"
+  "body_part": "left foot", "right foot", "head" — ONLY if actually stated (else null)
+  "play_pattern": "open play", "corner", "free kick", "penalty", "counter", \
+"throw in" — ONLY if stated or obvious from the phrase (else null)
+  "big_chance": true only for a clear-cut chance explicitly described as such, \
+else null
+
+Actions, by group:
+""" + _prompt_actions() + """
 
 Rules:
-- Use null (not empty strings) for anything not present in the phrase.
+- Use null (not empty strings) for anything not present in the phrase. NEVER \
+guess a body part, a location or a play pattern that was not said.
 - "team" must be exactly "Home" or "Away" when a side is mentioned; map any team \
 name, color, or "us/them/they" to the closest of Home/Away, otherwise null.
 - A "goal" uses action "goal" AND result "scored".
@@ -369,7 +398,8 @@ name, color, or "us/them/they" to the closest of Home/Away, otherwise null.
 - A goalkeeper stop uses action "save" (result "saved").
 - A booking uses action "card" with result "yellow" or "red"; "sent off" / \
 "second yellow" is a "red".
-- "corner kick" uses action "corner"; "offside" uses action "offside".
+- For SHOTS especially, capture "location" whenever the phrase gives one — where \
+a shot was taken from matters more than for any other event.
 - A substitution ("X comes on", "Y is subbed off") uses action "substitution"; \
 put the player coming ON in "player" when stated.
 - "player" is a name or shirt number only (e.g. "number 10"); a place is a \
@@ -378,32 +408,45 @@ location, never a player.
 
 Examples:
 phrase: "Home number 10 with a shot on target from the box"
-{"team":"Home","player":"number 10","action":"shot","result":"on target","location":"box"}
+{"team":"Home","player":"number 10","action":"shot","result":"on target","location":"box","body_part":null,"play_pattern":null,"big_chance":null}
 phrase: "Goal for the away team!"
-{"team":"Away","player":null,"action":"goal","result":"scored","location":null}
+{"team":"Away","player":null,"action":"goal","result":"scored","location":null,"body_part":null,"play_pattern":null,"big_chance":null}
+phrase: "Away number 9 heads it in from the corner"
+{"team":"Away","player":"number 9","action":"goal","result":"scored","location":"box","body_part":"head","play_pattern":"corner","big_chance":null}
+phrase: "Home nine drags it wide from the edge of the box"
+{"team":"Home","player":"number 9","action":"shot","result":"missed","location":"edge of the box","body_part":null,"play_pattern":null,"big_chance":null}
 phrase: "Great save by the home keeper"
-{"team":"Home","player":null,"action":"save","result":"saved","location":null}
+{"team":"Home","player":null,"action":"save","result":"saved","location":null,"body_part":null,"play_pattern":null,"big_chance":null}
 phrase: "Yellow card for the away number 4"
-{"team":"Away","player":"number 4","action":"card","result":"yellow","location":null}
-phrase: "Home defender sent off, red card"
-{"team":"Home","player":null,"action":"card","result":"red","location":null}
-phrase: "Corner kick for the away side"
-{"team":"Away","player":null,"action":"corner","result":null,"location":null}
-phrase: "Substitution for home, number 9 comes on"
-{"team":"Home","player":"number 9","action":"substitution","result":null,"location":null}
-phrase: "Foul by the home defender on the left wing"
-{"team":"Home","player":null,"action":"foul","result":null,"location":"left wing"}
+{"team":"Away","player":"number 4","action":"card","result":"yellow","location":null,"body_part":null,"play_pattern":null,"big_chance":null}
+phrase: "Away break away and score on the counter"
+{"team":"Away","player":null,"action":"goal","result":"scored","location":null,"body_part":null,"play_pattern":"counter","big_chance":null}
+phrase: "Home wins the ball back in midfield"
+{"team":"Home","player":null,"action":"recovery","result":"won","location":"midfield","body_part":null,"play_pattern":null,"big_chance":null}
 phrase: "Away completes a pass in midfield"
-{"team":"Away","player":null,"action":"pass","result":"complete","location":"midfield"}"""
+{"team":"Away","player":null,"action":"pass","result":"complete","location":"midfield","body_part":null,"play_pattern":null,"big_chance":null}"""
 
 
 def _empty_event() -> dict:
+    """The fields a parsed event may carry.
+
+    The qualifiers below are all optional and default to None — absent means
+    *unknown*, never zero. A coach who narrates plainly still produces exactly
+    the events they always did; the extra fields only capture detail that was
+    actually said. See football/taxonomy.py for the canonical vocabulary.
+    """
     return {
         "team": None,
         "player": None,
         "action": None,
         "result": None,
         "location": None,
+        # Qualifiers. body_part and play_pattern feed the xG model directly:
+        # a header converts worse than a foot at identical geometry, and a
+        # chance on the counter better than one against a set defence.
+        "body_part": None,
+        "play_pattern": None,
+        "big_chance": None,
     }
 
 
@@ -570,13 +613,25 @@ def is_duplicate_event(event: dict, last_sig, now: float, last_time: float,
 
 
 def resolve_event(event: dict, lineups=None) -> dict:
-    """Resolve roster-dependent fields on an already-normalised event."""
+    """Resolve roster-dependent fields and canonicalise the vocabulary.
+
+    Canonicalisation happens here, at the point of ingest, so the stored log
+    carries both what was said and what it means: `action` keeps the speaker's
+    word for review, `action_canonical` and the qualifiers carry the taxonomy's
+    form for analysis. Nothing is invented for a field nobody supplied.
+    """
     if not _has_event_bits(event):
         return {}
     event = {**_empty_event(), **event}
     name, team = control.resolve_player(
         lineups, event.get("player"), event.get("team"))
     event["player"], event["team"] = name, team
+    try:
+        from football.taxonomy import normalise
+
+        event = normalise(event)
+    except Exception:
+        pass          # the taxonomy is an enrichment, never a gate on logging
     return event
 
 

@@ -23,6 +23,38 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.23.0] - 2026-08-19
+
+Wire the producer side: the Ear and Manual Entry can now emit what the analytics
+can measure.
+
+### Fixed
+
+- **The taxonomy shipped without anything producing it.** v1.22.0 grew the
+  vocabulary to 44 actions and the analytics consumed it, but the parser prompt
+  still listed the original 13 and never asked for body part or play pattern —
+  so the app could measure far more than it could capture. A match run in that
+  state would have produced exactly the same thin data as before.
+
+### Changed
+
+- **The parser prompt is generated from `football/taxonomy.py`** rather than
+  duplicating a list, so the two can never drift apart again. It now asks for
+  `body_part`, `play_pattern` and `big_chance`, and asks specifically for a
+  shot's location — the single field that most improves the analysis, since it
+  is what turns expected goals from a flat average into an estimate of the
+  chance actually taken.
+- **The prompt forbids guessing.** A fabricated body part would silently skew
+  every xG built on it, so unstated fields must come back null.
+- **Ingest canonicalises without destroying what was said.** `action` keeps the
+  speaker's word for review; `action_canonical` and the qualifiers carry the
+  taxonomy's form for analysis.
+- **Manual Entry** reads its action list from the taxonomy (commonest first) and
+  gains body part, play pattern, clear-cut-chance and a location picker.
+
+Every qualifier remains optional. A coach who narrates plainly still logs
+exactly the events they always did.
+
 ## [1.22.0] - 2026-08-19
 
 Master plan Phase 2: the taxonomy, expected goals, and derived metrics.

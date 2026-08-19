@@ -216,3 +216,87 @@ def test_match_summary_runs_end_to_end_on_a_sparse_log():
     assert summary["Home"]["expected_goals"]["shots"] == 1
     # The bridged "box" gives real geometry rather than the no-location fallback.
     assert summary["Home"]["expected_goals"]["provenance"] == "zone_estimate"
+
+
+# --------------------------------------------------------------------------- #
+# The producer side — the Ear and Manual Entry must be able to emit what the
+# analytics can measure. The taxonomy existed for a release while the parser
+# still offered thirteen actions, so the app could measure far more than it
+# could ever capture.
+# --------------------------------------------------------------------------- #
+def test_the_parser_is_offered_the_whole_taxonomy():
+    import audio_tracker as A
+
+    offered = A._prompt_actions()
+
+    for action in ("recovery", "take_on", "aerial_duel", "through_ball",
+                   "sweeper_action", "handball"):
+        assert action in offered, f"{action} missing from the parser vocabulary"
+
+
+def test_the_prompt_asks_for_the_fields_xg_needs():
+    import audio_tracker as A
+
+    prompt = A.SYSTEM_PROMPT
+
+    assert "body_part" in prompt
+    assert "play_pattern" in prompt
+    assert "big_chance" in prompt
+    # Shot location is the field that most improves the analysis.
+    assert "location" in prompt and "shot" in prompt.lower()
+
+
+def test_the_prompt_forbids_guessing():
+    """A fabricated body part would silently skew every xG built on it."""
+    import audio_tracker as A
+
+    assert "NEVER" in A.SYSTEM_PROMPT
+    assert "ONLY if" in A.SYSTEM_PROMPT
+
+
+def test_an_event_carries_the_qualifier_fields():
+    import audio_tracker as A
+
+    assert set(A._empty_event()) >= {"body_part", "play_pattern", "big_chance"}
+
+
+def test_ingest_canonicalises_without_destroying_what_was_said():
+    import audio_tracker as A
+
+    e = A.resolve_event({"team": "Home", "player": "number 9",
+                         "action": "shoots", "result": "wide",
+                         "location": "edge of the box"})
+
+    assert e["action"] == "shoots"              # the speaker's word survives
+    assert e["action_canonical"] == "shot"      # and the taxonomy's form is added
+    assert e["shot_outcome"] == "off_target"
+
+
+def test_ingest_invents_nothing_for_unstated_fields():
+    import audio_tracker as A
+
+    e = A.resolve_event({"team": "Home", "action": "shot"})
+
+    assert e["body_part"] is None
+    assert e["play_pattern"] is None
+
+
+def test_a_richer_event_produces_a_real_xg_rather_than_the_fallback():
+    """The point of the whole exercise, end to end."""
+    import audio_tracker as A
+    from football.zones import enrich
+    from models import xg as XG
+
+    plain = A.resolve_event({"team": "Home", "action": "shot"})
+    detailed = A.resolve_event({"team": "Home", "action": "shot",
+                                "location": "box", "body_part": "head",
+                                "play_pattern": "corner"})
+
+    plain_xg = XG.estimate(enrich(plain))
+    detailed_xg = XG.estimate(enrich(detailed))
+
+    assert plain_xg["provenance"] == "no_geometry"      # a flat average
+    assert detailed_xg["provenance"] == "zone_estimate"  # an actual estimate
+    assert detailed_xg["xg"] != plain_xg["xg"]
+    # Header from a corner: worse than a plain box shot at the same geometry.
+    assert detailed_xg["factors"]["body_part"] < 1.0

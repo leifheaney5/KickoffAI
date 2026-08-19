@@ -107,13 +107,14 @@ def test_infer_event_from_text_extracts_obvious_event_fields():
 
     event = A.infer_event_from_text(text)
 
-    assert event == {
-        "team": "Away",
-        "player": "#21",
-        "action": "shot",
-        "result": "on target",
-        "location": "penalty box",
-    }
+    assert event["team"] == "Away"
+    assert event["player"] == "#21"
+    assert event["action"] == "shot"
+    assert event["result"] == "on target"
+    assert event["location"] == "penalty box"
+    # The local fallback never invents a qualifier it was not told.
+    assert event["body_part"] is None
+    assert event["play_pattern"] is None
 
 
 def test_infer_event_from_text_does_not_count_goal_kick_as_goal():
@@ -168,13 +169,14 @@ def test_parse_event_fills_model_gaps_with_fallback(monkeypatch):
 
     event = A.parse_event(text, lineups=lineups)
 
-    assert event == {
-        "team": "Home",
-        "player": "Hannah",
-        "action": "shot",
-        "result": "on target",
-        "location": "penalty box",
-    }
+    assert event["team"] == "Home"
+    assert event["player"] == "Hannah"          # resolved from the roster
+    assert event["action"] == "shot"
+    assert event["result"] == "on target"
+    assert event["location"] == "penalty box"
+    # Ingest canonicalises alongside the spoken form rather than replacing it.
+    assert event["action_canonical"] == "shot"
+    assert event["shot_outcome"] == "on_target"
 
 
 @pytest.mark.parametrize("phrase", ["gold", "corn her", "off side"])

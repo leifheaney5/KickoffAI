@@ -64,11 +64,33 @@ styleButtons();
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
-ACTIONS = [
-    "goal", "shot", "save", "pass", "tackle", "foul", "card",
-    "corner", "offside", "dribble", "cross", "clearance",
-    "interception", "substitution",
-]
+def _actions():
+    """The action list, read from the taxonomy so it cannot drift from the Ear.
+
+    Commonest first, since a coach typing mid-match should not have to scroll
+    past `formation_change` to reach `goal`.
+    """
+    from football.taxonomy import ACTIONS as ALL
+
+    common = ["goal", "shot", "save", "pass", "tackle", "foul", "card",
+              "corner", "offside", "dribble", "cross", "clearance",
+              "interception", "substitution"]
+    rest = sorted(a for a in ALL if a not in common)
+    return common + rest
+
+
+ACTIONS = _actions()
+
+# Optional qualifiers. Every one defaults to unstated: absent means unknown, and
+# a coach in a hurry still logs exactly what they always did.
+BODY_PARTS = [None, "right foot", "left foot", "head", "other"]
+PLAY_PATTERNS = [None, "open play", "corner", "free kick", "penalty", "counter",
+                 "throw in"]
+# Offered as a picker because a shot's position is the single field that most
+# improves the analysis — it is what turns xG from a flat average into an
+# estimate of the chance actually taken.
+LOCATIONS = [None, "six yard box", "box", "edge of the box", "left wing",
+             "right wing", "midfield", "final third", "own half"]
 
 # Each quick action: (display label, action value, default result)
 QUICK = [
@@ -94,7 +116,8 @@ def current_match_time() -> str:
     return f"{main_clk}{(' ' + added) if added else ''}"
 
 
-def log_event(team, player, action, result, location, match_time=None) -> dict:
+def log_event(team, player, action, result, location, match_time=None,
+              body_part=None, play_pattern=None, big_chance=None) -> dict:
     record = {
         "timestamp":  datetime.now(timezone.utc).isoformat(),
         "match_time": match_time or current_match_time(),
@@ -105,7 +128,17 @@ def log_event(team, player, action, result, location, match_time=None) -> dict:
         "action":     action or None,
         "result":     result.strip().lower() if result else None,
         "location":   location.strip() if location else None,
+        # Optional qualifiers — absent means unknown, never zero.
+        "body_part":    body_part or None,
+        "play_pattern": play_pattern or None,
+        "big_chance":   big_chance or None,
     }
+    try:
+        from football.taxonomy import normalise
+
+        record = normalise(record)
+    except Exception:
+        pass          # enrichment, never a gate on logging
     all_events = S.load_events()
     all_events.append(record)
     S.save_events(all_events)
@@ -194,12 +227,27 @@ with st.form("manual_entry", clear_on_submit=True):
     with row2[0]:
         player = st.text_input("Player", placeholder="#7 or name")
     with row2[1]:
-        location = st.text_input("Location", placeholder="box, left wing, midfield…")
+        location = st.selectbox(
+            "Location", LOCATIONS, format_func=lambda v: v or "—",
+            help="Where it happened. For a shot this matters more than any "
+                 "other field: it is what makes expected goals meaningful.")
     with row2[2]:
         match_time_input = st.text_input(
             "Match time", value=current_match_time(),
             placeholder="00:00",
         )
+
+    row3 = st.columns([1, 1, 1])
+    with row3[0]:
+        body_part = st.selectbox("Body part", BODY_PARTS,
+                                 format_func=lambda v: v or "—")
+    with row3[1]:
+        play_pattern = st.selectbox("From", PLAY_PATTERNS,
+                                    format_func=lambda v: v or "—")
+    with row3[2]:
+        big_chance = st.checkbox("Clear-cut chance",
+                                 help="A chance a player would be expected to "
+                                      "score. Leave off unless it plainly was.")
 
     submitted = st.form_submit_button(
         "Log Event", type="primary", use_container_width=True)
@@ -208,7 +256,10 @@ with st.form("manual_entry", clear_on_submit=True):
         if not team or not action:
             st.error("Team and Action are required.")
         else:
-            r = log_event(team, player, action, result, location, match_time_input)
+            r = log_event(team, player, action, result, location,
+                          match_time_input, body_part=body_part,
+                          play_pattern=play_pattern,
+                          big_chance=big_chance or None)
             suffix = f" / {r['result']}" if r["result"] else ""
             st.success(
                 f"Logged: **{team} {action}**{suffix} at {r['match_time']}"
