@@ -23,6 +23,24 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.23.1] - 2026-08-19
+
+Two defects found by running a real 99-minute match through the pipeline.
+
+### Fixed
+
+- **The batch path discarded everything on a transient network stall.** A
+  YouTube source timed out four and a half minutes into a run
+  (`IO error: Operation timed out`) and `analyzer.run()` simply stopped, writing
+  no output — the stepping path has always reconnected there, the batch path
+  never did. It now uses the same reconnect.
+- **A YouTube VOD was being treated as a live source.** v1.20.0 keyed "live" off
+  the source *kind*, so any network source got wall-clock timing. A VOD is read
+  far faster than real time, which would have badly overstated the match clock.
+  "Live" now means the source produces frames in real time: cameras, genuinely
+  live streams, and plain network URLs (a Veo `.m3u8`, which cannot be told from
+  a VOD and is the case where outage drift actually matters).
+
 ## [1.23.0] - 2026-08-19
 
 Wire the producer side: the Ear and Manual Entry can now emit what the analytics

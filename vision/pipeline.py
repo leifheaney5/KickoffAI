@@ -218,6 +218,12 @@ class MatchAnalyzer:
             while True:
                 ok, frame = cap.read()
                 if not ok:
+                    # A network source can stall mid-run rather than end. The
+                    # stepping path has always reconnected here; the batch path
+                    # did not, so a single timeout discarded the whole analysis.
+                    if self._reconnect():
+                        cap = self._cap
+                        continue
                     break
                 raw_index += 1
                 if raw_index % self.config.frame_stride != 0:
@@ -290,7 +296,17 @@ class MatchAnalyzer:
         # which propagates into wall-clock event stamps and cuts clips in the
         # wrong place. A file has no outages, and there video time is what you
         # actually want.
-        self._is_live = resolved.kind in _NETWORK_KINDS or resolved.kind == "camera"
+        # "Live" means the source produces frames in real time, not merely that
+        # it arrives over a network. A YouTube VOD is a network source read far
+        # faster than real time, so wall-clock timing would badly overstate the
+        # match clock; frame-based video time is correct there. A plain network
+        # URL (a Veo .m3u8) cannot be told apart from a VOD, so it is treated as
+        # live — that is the case where outage drift actually matters.
+        self._is_live = bool(
+            resolved.kind == "camera"
+            or (resolved.kind == "url")
+            or (resolved.kind in _NETWORK_KINDS and resolved.is_live)
+        )
         self._wall_start = time.time()
         self._paused_wall = 0.0
         return self
