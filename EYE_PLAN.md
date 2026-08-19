@@ -1,8 +1,8 @@
-# The Eye — ingest and live analytics plan
+# The Eye — ingest, live analytics, and the match-stat programme
 
-**Scope:** what the vision system takes in, and what it can tell you *while the
-match is still happening*. Post-hoc analysis, the trust gate and the report are
-out of scope; they work.
+**Scope:** what the vision system takes in, what it can tell you *while the
+match is still happening*, and the full match-stat taxonomy both ingests feed.
+The trust gate and the report machinery are reused, not rebuilt.
 
 **Where it stands.** The Eye runs as a persistent process, survives navigation,
 pauses at half-time, publishes health once a second, and computes possession and
@@ -195,3 +195,208 @@ every match clippable.
    schema's `frame_rate_sampled` currently assumes is fixed.
 3. **How loud should alerts (B4) be?** A coach mid-match has very little
    attention. Probably two or three signals per half, not a feed.
+
+---
+
+# Part 2 — The match-stat programme
+
+**Goal:** the full modern match-analysis taxonomy — everything Opta tracks —
+derived our own way.
+
+## The honest comparison
+
+Opta puts roughly **three trained loggers** on a match and reads position from
+**ten-plus calibrated cameras at 25 Hz**. We have one coach with a microphone and
+one camera. Chasing parity on volume is not a plan; it is a fantasy that would
+end with confident numbers built on nothing.
+
+What *is* achievable, and is arguably worth more to a coach:
+
+1. **The same taxonomy**, stat for stat.
+2. **Each stat honestly graded.** Opta hands you a table where a hand-tagged
+   shot and a modelled xG carry identical visual weight. Ours will say which is
+   which. `quality.py` already does this for camera runs; the programme extends
+   the idea to every metric.
+3. **Every stat links to its clip.** A number in a table is a claim; twenty
+   seconds of video is evidence. We shipped clips in v1.18.0 and Opta cannot
+   easily do this — it is the single strongest thing we have that they do not.
+
+## The architectural insight
+
+**Opta's event feed is hand-tagged by humans. So is ours — that is what the Ear
+is.** Our voice ingest is functionally an Opta logger, just one person instead of
+three. That reframes the whole programme:
+
+> The **event** half of Opta's taxonomy is gated on *vocabulary*, not on the
+> model. The **tracking** half is gated on the retrain.
+
+Most of what follows is therefore unblocked today.
+
+## Where each stat comes from
+
+Confidence descends down this list, and every metric declares which row it sits in.
+
+| Source | Produces | Confidence today |
+|---|---|---|
+| **Logged** — Ear + Manual Entry | Discrete events: shots, duels, set pieces, cards | High — a human saw it |
+| **Derived from events** | xG, xA, PPDA, field tilt, zone entries, sequences | High, but model-dependent |
+| **Vision positions** | Shape, line height, territory, packing, pressures | *Indicative* — ~4 of 22 players detected |
+| **Ball tracking** | xT, progressive carries, ball speed, chains | *Unusable* — 4–12% ball detection |
+
+---
+
+## S0 — The stat registry · the foundation, do this first
+
+Today "stats" means a hard-coded list of 16 strings in `stats.py` and 13 action
+weights in `insights.py`, with no definition, provenance or confidence attached
+to any of them. Adding eighty more metrics to that shape would be unmaintainable
+within a month.
+
+Build `statspec.py`: one declaration per metric —
+
+```
+id, name, definition, inputs, source (logged|derived|vision|ball),
+confidence_rule, unit, applies_to (team|player|both), clip_anchor
+```
+
+Everything else reads from it: the report, the season view, the UI, the CSV
+export, and the trust gate. A new stat becomes one registry entry plus a
+function, not an edit in nine files. `clip_anchor` is what lets any stat offer
+the moments behind it.
+
+**This is the difference between a stat programme and a pile of counters.**
+
+## S1 — A complete event vocabulary · unblocked
+
+We log 13 action types. Opta's F24 feed carries around a hundred. The gap is
+vocabulary, and it is filled in the Ear's grammar, the Manual Entry form, and the
+parser prompt — no vision work at all.
+
+**Missing, grouped by how a coach would say them:**
+
+- **Shooting** — body part (foot/head/other), placement, blocked, hit woodwork,
+  big chance, shot situation (open play, set piece, corner, free kick, penalty,
+  counter), assist, second assist, error leading to shot.
+- **Duels** — aerial won/lost, ground duel, take-on (successful/failed),
+  dispossessed, bad control, fouled while dribbling.
+- **Defending** — block, ball recovery, last-man challenge, error leading to
+  goal, pressure applied, clearance type (headed/hoofed).
+- **Set pieces** — throw-in, goal kick, free kick (direct/indirect), penalty
+  (scored/saved/missed), corner (short/inswinging/outswinging) and every one of
+  their outcomes.
+- **Goalkeeping** — save type (catch/parry/tip), claim, punch, sweeper action,
+  distribution (throw/kick, short/long), save from a big chance.
+- **Passing detail** — cross, through-ball, switch, long ball, key pass,
+  line-breaking pass, pass into the box, pass into the final third.
+
+Two things make this practical rather than a burden on the coach:
+
+- **Voice grammar stays natural.** "Home nine header saved" should produce a
+  shot with body part *head*, outcome *saved*, and a goalkeeper save — three
+  events from four words. The parser already has an LLM; the work is prompt and
+  schema, not new capture.
+- **Nothing is mandatory.** Every added field is optional and absent means
+  *unknown*, never zero. A coach who narrates plainly still gets today's stats.
+
+## S2 — Derived from events · unblocked
+
+### Expected goals, done honestly
+
+xG is the headline modern stat and the easiest to fake. Real models train on
+hundreds of thousands of shots; we would have dozens.
+
+So: **ship a published, transparent geometric model**, not a learned one.
+Distance and angle to goal, body part, situation, defensive pressure if known —
+with the coefficients written down in the repo and printed in the report. Label
+it a *model*, never a measurement.
+
+A youth-calibrated, transparent model is more honest than importing a Premier
+League one and quietly implying it transfers to under-14s on a smaller pitch. As
+match volume grows the coefficients can be refit against our own data — which is
+exactly the kind of thing owning the data makes possible.
+
+Then: **xA** (chance quality created), and shot maps rendered with `vision/render.py`,
+which already draws a pitch.
+
+### Team-shape metrics from the event stream
+
+- **PPDA** — opponent passes per defensive action; the standard pressing measure.
+- **Field tilt** — share of possession in the final third, a better dominance
+  signal than raw possession.
+- **Zone entries** — final-third and penalty-box entries, and what came of them.
+- **Set-piece conversion** — corners and free kicks to shots to goals, which in
+  youth football is a disproportionate share of everything.
+- **Possession sequences** — passes per sequence, sequence time, direct speed;
+  where possession starts and how it ends.
+- **Pass network** — who passes to whom, weighted, drawn on the pitch. Needs
+  player attribution, which the voice log already carries.
+
+## S3 — From vision positions · *indicative* until the retrain
+
+All of these are computable from `vision/analytics.py` today and grade
+*indicative*, exactly as possession does. Ship them labelled; they sharpen
+automatically when detection improves.
+
+- **Defensive line height** and **block length** (rear line to front line).
+- **Team width and compactness** over time, not just as an average.
+- **Territory** by thirds and by the eighteen-zone grid.
+- **Space control** — the Voronoi tint `vision/render.py` already draws, turned
+  into a number.
+- **Packing** — opponents bypassed by a pass, the metric that made Impect's name.
+- **Pressure events** — defenders within a radius of the ball carrier.
+- **Average positions** and, once identity holds, formation.
+
+## S4 — From ball tracking · gated on the retrain
+
+Listed to keep them out of the near-term backlog.
+
+- **Expected threat (xT)** — the value a possession action adds by moving the
+  ball, and the modern successor to xG for non-shooting actions.
+- **Progressive passes and carries**, distance-toward-goal thresholds.
+- **Ball speed**, pass length and angle measured rather than described.
+- **Possession chains** end to end, with xT accrued along them.
+- **Distance covered, sprints, top speed** per player — needs identity as well
+  as the ball.
+
+---
+
+## Sequencing for Part 2
+
+```
+S0 registry ──▶ S1 vocabulary ──▶ S2 derived (xG, PPDA, sequences)
+                                        │
+S3 vision-position metrics ─────────────┤   (indicative, ships in parallel)
+                                        ▼
+                              S4 ball metrics  (after the retrain)
+```
+
+| Stage | Size | Blocked by |
+|---|---|---|
+| S0 stat registry | M | — |
+| S1 event vocabulary | L | — |
+| S2 derived metrics | L | S0, S1 |
+| S3 position metrics | M | — (grades *indicative*) |
+| S4 ball metrics | L | The retrain |
+
+**S0 before anything.** Every stat added before the registry exists is another
+edit in nine files and another number with no stated provenance.
+
+## What would make this genuinely better than a stats table
+
+Three things, all of which we are uniquely placed to do:
+
+1. **Provenance on every number.** Logged, derived or modelled — and how much to
+   trust it. Nobody else in this market does it.
+2. **A clip behind every stat.** Click the xG and watch the shots.
+3. **Youth-calibrated models.** An xG fitted to under-14s on a small pitch,
+   rather than a professional model applied where it does not belong.
+
+## Open questions for Part 2
+
+1. **How much narration is too much?** The full vocabulary asks more of the
+   coach mid-match. The answer is probably that vision fills in over time and
+   voice covers what it cannot — but the split should be deliberate, not drift.
+2. **Do we publish our xG coefficients?** I would: it is the difference between a
+   model a coach can argue with and a black box they have to believe.
+3. **Which metrics reach a player's share pack?** xG for a striker is motivating;
+   for a ten-year-old it may not be. Worth deciding per metric, not globally.
