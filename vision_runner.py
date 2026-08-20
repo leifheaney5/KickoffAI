@@ -118,6 +118,22 @@ def is_supported() -> tuple[bool, str]:
     return True, ""
 
 
+def feed_profile(state: dict) -> str:
+    """The analysis profile the saved feed asks for, normalised.
+
+    control.json predates profiles and may hold nothing (or something stale), so
+    an unrecognised value falls back to the default rather than refusing to
+    start a match.
+    """
+    from vision.config import DEFAULT_PROFILE, get_profile
+
+    name = ((state or {}).get("feed") or {}).get("profile")
+    try:
+        return get_profile(name).name
+    except ValueError:
+        return DEFAULT_PROFILE
+
+
 def model_available(state: dict) -> bool:
     """True when the configured weights file exists on disk."""
     model = (state.get("feed") or {}).get("model") or ""
@@ -153,6 +169,9 @@ def status() -> dict:
         "started_at": started_at,
         "source": st.get("source"),
         "source_label": st.get("source_label", ""),
+        # Which profile this run was launched with. Empty for a run started
+        # before profiles existed, which the UI reads as "unknown", not "live".
+        "profile": st.get("profile", ""),
         "log": st.get("log", LOG_FILE),
         "ended_unexpectedly": st.get("ended_unexpectedly", False),
         "health": _health(running, paused, started_at, runner),
@@ -212,10 +231,16 @@ def build_argv(state: dict) -> list[str]:
         os.path.join(REPO_ROOT, "scripts", "live_vision.py"),
         "--model", str(feed.get("model") or "soccer_yolov8m_v1.pt"),
         "--device", resolve_device(feed.get("device", "auto")),
-        "--stride", str(int(feed.get("stride", 6) or 6)),
-        "--imgsz", str(int(feed.get("imgsz", 960) or 960)),
+        "--profile", feed_profile(state),
         "--conf", str(float(feed.get("conf", 0.25) or 0.25)),
     ]
+    # Stride and inference size come from the profile unless the feed has been
+    # tuned by hand on Camera & Feed. Passing them unconditionally, as this used
+    # to, meant the saved 960 always beat whatever the profile asked for — which
+    # is exactly the silent downscale the profiles exist to stop.
+    if feed.get("manual_sampling"):
+        argv += ["--stride", str(int(feed.get("stride", 6) or 6)),
+                 "--imgsz", str(int(feed.get("imgsz", 960) or 960))]
     if feed.get("fixed_camera"):
         argv.append("--fixed-camera")
     # Record the feed alongside analysis unless asked not to. Without this a
@@ -272,6 +297,7 @@ def start(state: dict = None) -> dict:
         "started_at": time.time(),
         "source": str(control.feed_source(state)),
         "source_label": control.feed_label(state),
+        "profile": feed_profile(state),
         "log": LOG_FILE,
         "argv": argv,
         "ended_unexpectedly": False,

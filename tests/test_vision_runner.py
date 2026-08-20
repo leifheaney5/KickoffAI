@@ -154,7 +154,10 @@ def test_written_and_spoken_notes_share_one_log(runner_env, tmp_path, monkeypatc
 def test_argv_passes_stream_url_as_video(runner_env):
     ctl, vr = runner_env
     state = ctl.load_control()
+    # manual_sampling: stride only reaches the runner when it is hand-set;
+    # otherwise the analysis profile decides. See vision/config.py.
     state["feed"].update({"kind": "stream", "device": "cpu", "stride": 4,
+                          "manual_sampling": True,
                           "url": "https://veo.example/live/index.m3u8"})
 
     argv = vr.build_argv(state)

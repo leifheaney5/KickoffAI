@@ -27,6 +27,12 @@ UI.page_setup("SET UP", "Camera & Feed")
 try:
     import cv2
     from vision import calibration as vcal
+    from vision.config import (
+        DEFAULT_PROFILE,
+        PROFILES,
+        get_profile,
+        profile_imgsz,
+    )
     from vision.runtime import DEVICE_CHOICES, DEVICE_LABELS, best_device
     from vision.sources import file_duration_seconds, grab_frame
     VISION_OK, VISION_ERR = True, ""
@@ -35,6 +41,13 @@ except Exception as exc:  # pragma: no cover - import guard
     DEVICE_CHOICES = ("auto", "cpu", "mps", "0")
     DEVICE_LABELS = {"auto": "Auto", "cpu": "CPU", "mps": "MPS (Apple Silicon)",
                      "0": "CUDA GPU 0"}
+    # Enough to keep the profile selector working without the vision stack: the
+    # choice is saved to control.json either way, and the runner reads it there.
+    DEFAULT_PROFILE = "live"
+    PROFILES = {}
+
+PROFILE_CHOICES = tuple(sorted(PROFILES)) or ("live", "post")
+PROFILE_LABELS = {"live": "Live", "post": "Post-match"}
 
 # Optional click-to-mark component for fixed-camera pitch calibration.
 try:
@@ -166,14 +179,81 @@ elif test and test.get("ok"):
 
 
 # --------------------------------------------------------------------------- #
-# 3. Model & device
+# 3. Analysis profile
+#
+# Inference size, not source resolution, is what decides whether the Eye sees
+# the ball, and the two answers cannot be reconciled: one keeps up with a live
+# feed, the other is worth trusting. So it is a declared choice, like the fixed-
+# camera checkbox below, and the page says plainly what each one buys.
+# --------------------------------------------------------------------------- #
+st.markdown(brand.section("Analysis profile"), unsafe_allow_html=True)
+
+saved_profile = feed.get("profile", DEFAULT_PROFILE)
+if saved_profile not in PROFILE_CHOICES:
+    saved_profile = DEFAULT_PROFILE
+
+profile = st.segmented_control(
+    "Profile", PROFILE_CHOICES,
+    format_func=lambda p: PROFILE_LABELS.get(p, p.title()),
+    default=saved_profile, key="feed_profile",
+    help="How much of each frame the Eye actually looks at. This matters more "
+         "than any other setting here: the same footage graded unusable at "
+         "960px and five times better at 1920px.")
+profile = profile or saved_profile
+
+if profile != feed.get("profile"):
+    state["feed"]["profile"] = profile
+    control.save_control(state)
+    st.rerun()
+
+# The expected grade, stated up front. quality.py decides the real one from what
+# the run actually saw, and nothing here can promise it — but a coach choosing
+# Live on match day should already know the numbers will be labelled
+# directional, rather than discover it in the report.
+if profile == "live":
+    st.info("Live runs at 960px and stride 6 so it stays ahead of the feed. "
+            "The ball is only a few pixels at that size and is missed on most "
+            "frames, so possession and passing read as directional at best. On "
+            "the 1080p test clip it saw the ball on 6.6% of frames — under the "
+            "10% floor, which means the report shows no vision figures at all. "
+            "Record the match and re-run it on Post-match to get numbers.")
+else:
+    st.info("Post-match runs at the footage's own resolution and stride 3, and "
+            "is the only profile that has reached a *measured* grade (38.3% "
+            "ball detection on the 1080p test clip). It takes about three times "
+            "the length of the match, so point it at a recording rather than a "
+            "live feed.")
+
+if profile == "post" and kind == "stream":
+    st.warning("Point Post-match at a recording. On a live stream it falls "
+               "behind the feed and never catches up, so a match analysed this "
+               "way would stop partway through.")
+
+# Show the size this profile will actually infer at, once there is a tested
+# frame to scale against. `post` picks it from the footage, so it is not
+# something the operator can read off the profile name.
+_test = st.session_state.get(TEST_KEY) or {}
+_w, _h = int(_test.get("w") or 0), int(_test.get("h") or 0)
+if VISION_OK and _w and _h and not feed.get("manual_sampling"):
+    _px = profile_imgsz(get_profile(profile), max(_w, _h))
+    st.caption(f"The source you tested is {_w}x{_h}, so this profile will infer "
+               f"at {_px}px.")
+
+if feed.get("manual_sampling"):
+    st.caption(f"Overridden by hand: stride {feed.get('stride')} · "
+               f"{feed.get('imgsz')}px. Clear the override below to let the "
+               "profile decide.")
+
+
+# --------------------------------------------------------------------------- #
+# 4. Model & device
 # --------------------------------------------------------------------------- #
 st.markdown(brand.section("Model & device"), unsafe_allow_html=True)
 
 _auto = best_device() if VISION_OK else "cpu"
 _labels = {**DEVICE_LABELS, "auto": f"Auto ({_auto})"}
 st.caption(f"{feed.get('model')} on {_labels.get(feed.get('device'), 'Auto')} · "
-           f"stride {feed.get('stride')} · {feed.get('imgsz')}px · "
+           f"{PROFILE_LABELS.get(profile, profile)} profile · "
            f"confidence {feed.get('conf')}")
 
 with st.expander("Adjust model, device and sampling"):
@@ -187,18 +267,27 @@ with st.expander("Adjust model, device and sampling"):
         index=list(DEVICE_CHOICES).index(_dev) if _dev in DEVICE_CHOICES else 0,
         format_func=lambda d: _labels.get(d, d))
 
+    manual = st.checkbox(
+        "Set stride and image size by hand", key="feed_manual_sampling",
+        value=bool(feed.get("manual_sampling", False)),
+        help="Off, the profile above decides both. On, these two values are "
+             "sent to the runner instead — which is how footage used to get "
+             "silently downscaled, so only do it deliberately.")
+
     s1, s2, s3 = st.columns(3)
     stride = s1.slider("Frame stride", 1, 15, int(feed.get("stride", 6)),
+                       disabled=not manual,
                        help="Process 1 of every N frames. Higher keeps a live "
                             "feed real-time on slower hardware.")
-    imgsz = s2.select_slider("Image size", [640, 960, 1280],
-                             value=int(feed.get("imgsz", 960)))
+    imgsz = s2.select_slider("Image size", [640, 960, 1280, 1920],
+                             value=int(feed.get("imgsz", 960)),
+                             disabled=not manual)
     conf = s3.slider("Confidence", 0.1, 0.7, float(feed.get("conf", 0.25)), 0.05)
 
     if st.button("Save model settings", type="primary", width="stretch"):
         state["feed"].update({"model": model.strip(), "device": device,
                               "stride": int(stride), "imgsz": int(imgsz),
-                              "conf": float(conf)})
+                              "conf": float(conf), "manual_sampling": bool(manual)})
         control.save_control(state)
         st.success("Saved.")
         st.rerun()
@@ -208,7 +297,7 @@ with st.expander("Adjust model, device and sampling"):
 
 
 # --------------------------------------------------------------------------- #
-# 4. Pitch calibration
+# 5. Pitch calibration
 #
 # A fixed camera (Veo) only needs the image->pitch homography set once: mark
 # four known landmarks on a grabbed frame and every position from then on
@@ -357,7 +446,7 @@ elif VISION_OK:
 
 
 # --------------------------------------------------------------------------- #
-# 5. Ingest mode — where vision-first becomes an explicit choice
+# 6. Ingest mode — where vision-first becomes an explicit choice
 # --------------------------------------------------------------------------- #
 st.markdown(brand.section("Ingest mode"), unsafe_allow_html=True)
 
