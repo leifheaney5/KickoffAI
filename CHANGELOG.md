@@ -23,6 +23,71 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.28.0] - 2026-08-20
+
+Workstream W4. Three more defects in the spatial layer, all of the same family as
+the v1.24.0 flank bug: a team-relative claim computed in an absolute frame.
+
+### Fixed
+
+- **`spatial_summary` named the wrong team as having the higher line.** It
+  compared raw `centroid_x`. A high line means far from your *own* goal, and the
+  two sides attack opposite ways, so for one of them a large x is the deepest
+  position on the pitch. It named the deeper team whenever the deeper side was
+  the one attacking towards x=0. The pre-existing test had itself encoded the
+  wrong answer and is corrected.
+- **`team_shape_series` raised `TypeError` on a record with x but no y.** It
+  guarded only x and then read both, while `collect_player_points` guarded both.
+- **One off-pitch projection could poison a whole match.** No filter existed
+  because none was needed while every run was uncalibrated. Under a homography a
+  crowd or bench detection projects hundreds of pitch-lengths away, and a single
+  one drags the centroid, compactness and every average position with it. New
+  `usable_xy` is now the one definition of a usable point for the module; NaN and
+  inf fail the same range comparison, so no separate check is needed. It is
+  provably inert on uncalibrated runs, and that property has its own test.
+
+### Changed
+
+- Direction flipping is consolidated into `is_advancing` / `attack_relative`, so
+  there is one place that can get it wrong instead of four.
+- The digest reports the centroid attack-relative. It was previously the one
+  absolute number on a line of otherwise attack-relative ones, leaving the model
+  no way to reconcile "centroid 30" with "attacking third 70%".
+- `collect_player_points` / `team_points` divergence reconciled in favour of the
+  track: a track is one player, so its team belongs to the track rather than the
+  frame, matching what `vision/teams.py` already does by majority-voting colour
+  history. Worth noting honestly - on today's pipeline output this divergence was
+  unreachable, so this closes a latent inconsistency rather than an observed
+  wrong number.
+
+### Added
+
+- `tests/fixtures/tactical_camera_calibration.json` - an exact pinhole projection
+  of a stated camera pose, flagged SYNTHETIC in its own source field. Landmarks
+  could not be pinned from the real 640x360 probe frame to better than 1.5-2 px,
+  and a 2 px slip is worth 6.3 m at the far corner, so expected values derived
+  from eyeballed reads would have had to be captured from a run - the exact thing
+  this suite exists not to do. The projection is recomputed in the test module by
+  plain trigonometry, giving an independent oracle rather than a baseline.
+- `docs/SPATIAL_VALIDATION.md` - what is verified, what is not, and a five-step
+  procedure to close the gap.
+
+### Tests
+
+473 to 508.
+
+### Recorded, not fixed - outside this workstream's files
+
+- `vision/schema.py:player_token` bakes the team letter and jersey number into
+  the player id, so one physical player becomes several ids across a run as those
+  labels firm up. Measured on the benchmark runs: stripping the team prefix takes
+  arm C from 2,355 ids to 1,327 distinct underlying tracks, so roughly 44% of
+  what looked like tracker churn was this. The remaining 1,327 against ~22 real
+  players is genuine and still rises with detection quality.
+- `vision/analytics.py` cuts thirds at 33.333/66.667 while `vision/bridge.py`
+  cuts at 33/66, so x=66.5 is midfield on the Team Shape page and the attacking
+  third in the event feed.
+
 ## [1.27.0] - 2026-08-20
 
 Workstream W3. Turns two throwaway experiments into permanent tooling, so the
