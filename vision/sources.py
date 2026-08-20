@@ -124,3 +124,57 @@ def _first_video_info(info: dict) -> dict:
             if entry:
                 return entry
     return info
+
+
+# --------------------------------------------------------------------------- #
+# Frame grabbing
+#
+# Used by the calibration and connection-test flows, which need one still frame
+# from a source without standing up the whole pipeline.
+# --------------------------------------------------------------------------- #
+def grab_frame(source: Any, at_seconds: float = 0.0):
+    """Open ``source`` and return ``(frame, width, height, fps)``.
+
+    ``at_seconds`` seeks into a recording before grabbing. Frame 0 of a match
+    file is whenever record was pressed -- the camera still being levelled, or
+    an empty pitch -- which is a poor frame to calibrate from. Seeking is
+    skipped for live sources, where there is nothing to seek within, and lands
+    on the nearest preceding keyframe rather than the exact second; for a fixed
+    camera that makes no difference, since the view does not change.
+
+    Returns ``(None, w, h, fps)`` if no frame arrives.
+    """
+    import cv2
+
+    resolved = resolve_video_source(source)
+    cap = cv2.VideoCapture(resolved.capture_source)
+    try:
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        if at_seconds > 0 and resolved.kind == "file":
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(at_seconds) * 1000.0)
+        # A network stream often needs a few reads before it returns a frame.
+        for _ in range(8):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return frame, w or frame.shape[1], h or frame.shape[0], fps
+        return None, w, h, fps
+    finally:
+        cap.release()
+
+
+def file_duration_seconds(source: Any) -> float:
+    """Length of a recorded source in seconds, or 0.0 if it cannot be read."""
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(source))
+        try:
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+            return count / fps if fps > 0 and count > 0 else 0.0
+        finally:
+            cap.release()
+    except Exception:
+        return 0.0

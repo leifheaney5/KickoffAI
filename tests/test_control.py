@@ -329,3 +329,27 @@ def test_a_new_match_returns_to_empty(ctl):
     fresh = control.new_match(control.load_control())
 
     assert control.match_phase(fresh) == "empty"
+
+
+# --------------------------------------------------------------------------- #
+# Readable durations
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("seconds,expected", [
+    (0, "0 s"),
+    (30, "30 s"),
+    (59.4, "59 s"),
+    (59.6, "1 min"),      # must not read "60 s"
+    (60, "1 min"),
+    (90, "2 min"),
+    (2700, "45 min"),
+    (3600, "1 h 00 min"),
+    (5400, "1 h 30 min"),
+])
+def test_human_duration_reads_naturally(ctl, seconds, expected):
+    control, _ = ctl
+    assert control.human_duration(seconds) == expected
+
+
+def test_human_duration_never_returns_a_negative_length(ctl):
+    control, _ = ctl
+    assert control.human_duration(-5) == "0 s"

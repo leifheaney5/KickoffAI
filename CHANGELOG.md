@@ -23,6 +23,36 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.25.0] - 2026-08-20
+
+Finishing what could be finished without match footage: the join between the
+calibration maths and the pipeline, and the workflow friction waiting at the
+other end.
+
+### Added
+
+- Tests for `MatchAnalyzer._project` - the single point where pixels become
+  pitch coordinates, and so where a calibration silently going unused shows up.
+  That is the exact shape of the v1.24.0 `--fixed-camera` bug, and nothing
+  covered it. One test quantifies what calibration buys rather than asserting
+  it: for the same pixel in the same frame the uncalibrated fallback is wrong by
+  8.5 metres, putting a player on the halfway line across the width while the
+  calibrated projection knows the far half is squeezed into fewer pixels.
+- Camera & Feed can seek into a recording before grabbing a calibration frame.
+  It previously always took frame 0 - whenever record was pressed, with the
+  camera still being levelled or the pitch empty - which is a poor frame to mark
+  landmarks on. Seeking lands on the nearest preceding keyframe rather than the
+  exact second; for a fixed camera that makes no difference, since the view does
+  not change.
+- `control.human_duration` for readable lengths ("45 s", "12 min", "1 h 34 min").
+
+### Changed
+
+- `grab_frame` and `file_duration_seconds` moved from `pages/Camera_and_Feed.py`
+  into `vision/sources.py`. They are source-handling utilities, not UI, and
+  living in a Streamlit page made them untestable.
+- Test count 372 to 394.
+
 ## [1.24.1] - 2026-08-20
 
 ### Fixed

@@ -7,6 +7,7 @@ done reported "image" space and no test noticed.
 """
 
 import importlib.util
+import types
 
 import numpy as np
 import pytest
@@ -178,3 +179,71 @@ def test_live_runner_loads_the_calibration_for_a_fixed_camera():
         text = fh.read()
     assert "homography=homography" in text, "analyzer must receive the homography"
     assert "load_calibration()" in text, "runner must load the saved calibration"
+
+
+# --------------------------------------------------------------------------- #
+# The join: does the pipeline actually use the homography it was handed?
+#
+# The maths above is correct and the analytics above it are tested, but nothing
+# proved the two were connected. _project is the single point where pixels
+# become pitch coordinates, so it is where a calibration silently going unused
+# would show up -- which is exactly the shape of the --fixed-camera bug.
+# --------------------------------------------------------------------------- #
+def _analyzer(homography):
+    """A stand-in with just the attributes _project touches.
+
+    Constructing a real MatchAnalyzer loads the YOLO detector, which is far too
+    heavy for a unit test and unavailable in CI.
+    """
+    from vision.config import PipelineConfig
+    from vision.pipeline import MatchAnalyzer
+
+    stub = types.SimpleNamespace(
+        homography=homography, _frame_w=1000, _frame_h=600,
+        config=PipelineConfig(),
+    )
+    return lambda pts: MatchAnalyzer._project(stub, pts)
+
+
+@requires_cv2
+def test_project_uses_the_homography_when_one_is_present():
+    H = vcal.homography_from_calibration({"points": SIDELINE})
+    metres, norm = _analyzer(H)([(500.0, 300.0)])
+    assert norm[0] == pytest.approx([50.0, 62.5], abs=1e-3)
+    assert metres[0] == pytest.approx([52.5, 42.5], abs=1e-3)
+
+
+def test_project_falls_back_to_image_space_without_a_calibration():
+    metres, norm = _analyzer(None)([(500.0, 300.0)])
+    # Straight pixel scaling: 500/1000 and 300/600, perspective uncorrected.
+    assert norm[0] == pytest.approx([50.0, 50.0], abs=1e-3)
+
+
+@requires_cv2
+def test_the_uncalibrated_fallback_is_wrong_by_metres_not_rounding():
+    """Quantifies what calibration actually buys, so it is not a matter of faith.
+
+    Same pixel, same frame. Uncalibrated says the player is on the halfway line
+    across the pitch's width; calibrated knows the far half is squeezed into
+    fewer pixels and puts them 8.5 m nearer the far touchline.
+    """
+    H = vcal.homography_from_calibration({"points": SIDELINE})
+    calibrated, _ = _analyzer(H)([(500.0, 300.0)])
+    uncalibrated, _ = _analyzer(None)([(500.0, 300.0)])
+    error_m = abs(float(calibrated[0][1]) - float(uncalibrated[0][1]))
+    assert error_m == pytest.approx(8.5, abs=0.1)
+
+
+def test_project_returns_empty_pairs_for_no_points():
+    metres, norm = _analyzer(None)([])
+    assert metres.shape == (0, 2) and norm.shape == (0, 2)
+
+
+@requires_cv2
+def test_project_preserves_input_order_and_length():
+    H = vcal.homography_from_calibration({"points": SIDELINE})
+    pts = [(200.0, 100.0), (1000.0, 500.0), (500.0, 300.0)]
+    metres, norm = _analyzer(H)(pts)
+    assert len(metres) == len(norm) == 3
+    assert norm[0] == pytest.approx([0.0, 0.0], abs=1e-3)
+    assert norm[1] == pytest.approx([100.0, 100.0], abs=1e-3)

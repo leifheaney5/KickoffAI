@@ -129,10 +129,24 @@ Two genuine bugs found and fixed:
 CI now installs `opencv-python-headless` so the geometry is checked there too,
 rather than only on a dev box.
 
+**The join is tested too.** `_project` is the one place pixels become pitch
+coordinates, so it is where a calibration silently going unused would show up —
+the exact shape of the `--fixed-camera` bug. It now has tests both ways, and one
+that quantifies what calibration buys rather than asserting it: for the same
+pixel in the same frame, the uncalibrated fallback is wrong by **8.5 metres**,
+because it puts a player on the halfway line across the width while the
+calibrated projection knows the far half is squeezed into fewer pixels.
+
+**Ready for the footage.** Calibrating from a recording used to grab frame 0 —
+whenever record was pressed, with the camera still being levelled. Camera & Feed
+now offers a seek for file sources, so a frame with the pitch lines clearly in
+view can be picked instead. `grab_frame` and `file_duration_seconds` moved out of
+the page into `vision/sources.py` where they are testable and reusable.
+
 **Still open — needs Track A or C footage:** no calibration has yet been run
 against real video, so `coordinate_space` has still never actually read `pitch`
-on a match. The path is now proven and tested; it needs footage worth pointing it
-at.
+on a match. The path is now proven, tested end to end, and the workflow that
+feeds it has had its sharp edge removed. It needs footage worth pointing it at.
 
 ## Track C — A fixed camera for one match · one weekend
 

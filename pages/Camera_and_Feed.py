@@ -28,6 +28,7 @@ try:
     import cv2
     from vision import calibration as vcal
     from vision.runtime import DEVICE_CHOICES, DEVICE_LABELS, best_device
+    from vision.sources import file_duration_seconds, grab_frame
     VISION_OK, VISION_ERR = True, ""
 except Exception as exc:  # pragma: no cover - import guard
     VISION_OK, VISION_ERR = False, str(exc)
@@ -123,26 +124,6 @@ control.save_control(state)
 st.markdown(brand.section("Test connection"), unsafe_allow_html=True)
 
 TEST_KEY = "kp_feed_test"
-
-
-def grab_frame(source):
-    """Open the source and return (frame, width, height, fps), warming it first."""
-    from vision.sources import resolve_video_source
-
-    resolved = resolve_video_source(source)
-    cap = cv2.VideoCapture(resolved.capture_source)
-    try:
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        # A network stream often needs a few reads before it returns a frame.
-        for _ in range(8):
-            ok, frame = cap.read()
-            if ok and frame is not None:
-                return frame, w or frame.shape[1], h or frame.shape[0], fps
-        return None, w, h, fps
-    finally:
-        cap.release()
 
 
 ready = control.feed_ready(state)
@@ -272,11 +253,27 @@ if VISION_OK and not CLICK_OK:
     st.caption("Click-to-mark needs the image component: "
                "`pip install streamlit-image-coordinates`")
 elif VISION_OK:
+    # Calibrating from a recording almost never wants frame 0 -- that is the
+    # moment record was pressed. Offer a seek so a frame with the pitch lines
+    # clearly in view can be picked instead.
+    grab_at = 0.0
+    if kind == "file":
+        duration = file_duration_seconds(control.feed_source(state)) if ready else 0.0
+        grab_at = st.number_input(
+            "Grab the frame from (seconds into the recording)",
+            min_value=0.0, value=0.0, step=15.0,
+            max_value=float(int(duration)) if duration else None,
+            help="Frame 0 is whenever you pressed record, often with the camera "
+                 "still being set up. Pick a moment where the pitch lines and "
+                 "corners are clearly visible."
+            + (f" This recording is {control.human_duration(duration)} long."
+               if duration else ""))
+
     gc1, gc2 = st.columns(2)
     if gc1.button("Grab frame to calibrate", width="stretch", disabled=not ready):
         with st.spinner("Grabbing a frame…"):
             try:
-                fr, _w, _h, _fps = grab_frame(control.feed_source(state))
+                fr, _w, _h, _fps = grab_frame(control.feed_source(state), grab_at)
             except Exception as exc:
                 fr = None
                 st.error(f"Could not grab frame: {exc}")

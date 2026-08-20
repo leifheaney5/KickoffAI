@@ -763,3 +763,14 @@ def tracker_online(status: dict, max_age: float = 8.0) -> bool:
 def fmt_clock(seconds: float) -> str:
     s = int(max(seconds, 0))
     return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def human_duration(seconds: float) -> str:
+    """A short, readable length: "45 s", "12 min", "1 h 34 min"."""
+    seconds = max(0.0, float(seconds))
+    if round(seconds) < 60:
+        return f"{seconds:.0f} s"
+    minutes = int(round(seconds / 60))
+    if minutes < 60:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60:02d} min"
