@@ -8,6 +8,7 @@ missing user cannot be distinguished from a wrong password.
 import importlib
 import json
 import os
+import time
 
 import pytest
 
@@ -158,8 +159,11 @@ def test_an_expired_session_is_not_accepted(club, monkeypatch):
     _, _, auth, _, _ = club
     token = auth.start_session(auth.create_user("leif", "a-good-password"))
 
-    monkeypatch.setattr(auth.time, "time",
-                        lambda: os.times().elapsed + auth.SESSION_TTL + 10_000)
+    # Read the real clock before patching it. os.times().elapsed happens to be
+    # epoch time on macOS but is seconds-since-boot on Linux, which put the fake
+    # "now" decades in the past -- so this never tested expiry on CI at all.
+    expired_at = time.time() + auth.SESSION_TTL + 10_000
+    monkeypatch.setattr(auth.time, "time", lambda: expired_at)
     assert auth.current_user(token) is None
 
 

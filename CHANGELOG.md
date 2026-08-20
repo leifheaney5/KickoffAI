@@ -23,6 +23,17 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.24.1] - 2026-08-20
+
+### Fixed
+
+- `test_an_expired_session_is_not_accepted` never tested expiry on Linux. It
+  built its fake clock from `os.times().elapsed`, which is epoch time on macOS
+  but seconds-since-boot on Linux - so on CI the fake "now" landed decades in the
+  past and the session was never expired at all. Green locally, and green on CI
+  for the wrong reason until an unrelated push made it fail. It now reads the
+  real clock before patching it.
+
 ## [1.24.0] - 2026-08-20
 
 Validation plan Track B and Track D. The spatial half of the product had 305
