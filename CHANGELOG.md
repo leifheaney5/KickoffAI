@@ -23,6 +23,70 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.29.0] - 2026-08-20
+
+Workstream W2. Identity permanence, which had zero tests and was fragmenting ~22
+players into over a thousand tracks.
+
+### Characterised before changing anything
+
+Counters added to `IdentityManager` (spawns, reclaims, gate misses, contested
+claims, expiries), then a synthetic replay calibrated to the real runs'
+players-per-frame. The replay is 1.5-2.7x harder than the footage by
+ids-per-detection, so its verdicts are conservative rather than flattering.
+
+The counters were unambiguous: essentially every spawn was a gate miss - a
+dormant candidate inside `max_lost_frames` but outside the distance gate.
+Contested claims were zero, and only 22 of ~1370 re-ID attempts had an owner
+that had already expired, which rules out `max_lost_frames` as the bottleneck.
+Scoring predictions against ground truth showed the decisive fact: constant-
+velocity prediction was worse than doing nothing at every gap beyond one frame.
+
+### Fixed
+
+- **Fixed-radius gate**, simultaneously too loose at a one-frame gap (admits the
+  crowd, and nearest-neighbour then picks wrong) and too tight past ~5 frames
+  (excludes the real owner and forces a spawn). Now scales with the gap,
+  `gate + 1.2 * (gap - 1)`, capped at 20 units. The 1.2 is derived from 8 m/s at
+  10 sampled fps on a 105x68 m pitch, not fitted.
+- **Velocity extrapolation amplified noise** - a difference of two noisy
+  positions multiplied by the gap. Coasting now stops after 3 frames and the
+  measured step is clipped to one sprint before entering the estimate.
+- **Order-dependent greedy assignment** replaced with whole-frame cheapest-first.
+  Worth little at the old tight gate, which is why contested claims read zero,
+  but necessary once the gate widens.
+
+Replay result: 378/333/290 identities for 22 players becomes 47/44/36, with
+identity quality (harmonic mean of purity and coverage) rising from 0.23/0.31/0.32
+to 0.50/0.53/0.71. Both are asserted, because collapsing everyone into a single
+id would score perfectly on count alone.
+
+Rejected on measurement: re-checking pass 1 against the motion gate to catch
+base-tracker id swaps made every arm clearly worse.
+
+### Tests
+
+508 to 535. From zero. Each change was verified load-bearing by reverting it and
+confirming a test catches it.
+
+### Honest limits
+
+- **The rising trend was not reproduced.** Identity count climbs with detection
+  quality on the real runs, and no mechanism inside this module reproduces that.
+  The arithmetic points elsewhere: arm C's extra 391 tracks cost ~30 detections
+  each against ~80 for the average track, which is the signature of short-lived
+  marginal detections rather than better coverage of the existing 22. A
+  pitch-polygon filter on detections before `identities.update()` would test that
+  directly, and is the next change to make.
+- **`GATE_MAX = 20.0` is a judgement call.** 12.0 scored identically on quality
+  (0.580 vs 0.579) and would yield ~40% more identities. 20 was chosen on physics
+  - the reachable set after ~1.3 s of sprinting. If a real run shows identities
+  merging, this is the knob to turn down.
+- Re-ID sees position and nothing else. `TeamClassifier` and jersey OCR both run
+  downstream, keyed by the ids this module produces. Feeding team colour into the
+  gate would disambiguate the crowded cases that still cost purity, but needs a
+  pipeline change.
+
 ## [1.28.0] - 2026-08-20
 
 Workstream W4. Three more defects in the spatial layer, all of the same family as
