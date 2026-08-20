@@ -23,6 +23,78 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.30.0] - 2026-08-20
+
+Workstream W1, and the reason the whole wave happened. The pipeline was
+downscaling every frame to 960 px before inference, throwing away exactly the
+pixels the ball occupies.
+
+### Added
+
+- Analysis profiles in `vision/config.py`: `live` (960 px, stride 6) and `post`
+  (scales to the source, stride 3). `PipelineConfig.apply_profile()` can be
+  called twice - once before the capture opens and once after - because that
+  second call is the only moment `post` can know the native frame size.
+- Auto-scaling clamped by `POST_IMGSZ_MIN = 960` and `POST_IMGSZ_MAX = 1920`,
+  rounded up to a multiple of 32. The floor is half the bug: analysing 360p
+  footage at its own 640 would be worse than doing nothing.
+- `--profile {live,post}` on `scripts/live_vision.py`. `--imgsz` and `--stride`
+  now default to None and act as overrides, so existing command lines behave
+  exactly as before.
+- `vision_runner.feed_profile()` reads the profile from control.json, falling
+  back to `live` on anything unknown rather than refusing to start. Stride and
+  imgsz only reach the runner when the feed sets `manual_sampling` - passing them
+  unconditionally is what let a saved 960 out-vote everything else.
+- An Analysis profile section on Camera & Feed showing the resolved inference
+  size against the tested source, and warning when `post` is aimed at a live
+  stream.
+- `quality.py` records which profile produced a run (empty for older stats
+  files) and explains an indicative grade on a `live` run as the design working
+  rather than a fault.
+
+### Measured on real footage
+
+Full 10:05 clip, MPS, both runs to completion under `caffeinate -i`:
+
+| profile | imgsz | stride | ball detection | wall clock | vs real time | grade |
+|---|---:|---:|---:|---:|---:|---|
+| live | 960 | 6 | 6.6% | 532.9 s | 0.88x | unusable |
+| post | 1920 | 3 | **38.3%** | 1884.4 s | 3.11x | **measured** |
+
+`post` clears the 35% `measured` bar. `live` reproduces the earlier arm-B figure
+exactly, which is good evidence the harness measures the same thing.
+
+### Corrections to the plan's assumptions
+
+- **`live` grades `unusable`, not `indicative`.** The plan assumed 10%+; this clip
+  gives 6.6%. The profile summary and the Camera & Feed copy now state the
+  measured figure and say plainly that a live run may produce no vision figures
+  at all, and to re-run the recording on `post`. `expected_grade` is documented
+  as a ceiling, not a promise.
+- **The 4x cost model was theory; measured is 1.8x.** Inference FLOPs are
+  quadratic in imgsz, but decode, tracking and team clustering do not scale with
+  it, so end-to-end 1920 costs 1.77x per frame rather than 4x.
+
+### Tests
+
+535 to 562.
+
+### Downstream gap - a measured grade is not yet measured possession
+
+The `post` run detects the ball in 38.3% of frames and still produces **0 passes
+and 0/0 possession**; every ball frame reads `status: "loose"`. Diagnosed
+directly from the run: the median distance from the ball to its nearest player is
+**6.91 pseudo-metres**, and only **4.9%** of ball frames fall inside
+`possession_radius_m = 1.5`. With `possession_frames` requiring consecutive
+confirmations, nothing ever confirms.
+
+The cause is that an uncalibrated run has no metres. `_project` maps
+image-normalised coordinates onto a nominal 105x68 pitch whatever fraction of the
+pitch is actually in frame, and applies no perspective correction, so a
+metre-denominated threshold cannot mean the same thing in two parts of the image.
+Calibration is now the critical path: ball detection is solved, and possession is
+waiting on real coordinates. Lives in `vision/heuristics.py`.
+
 ## [1.29.0] - 2026-08-20
 
 Workstream W2. Identity permanence, which had zero tests and was fragmenting ~22
