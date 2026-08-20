@@ -23,6 +23,48 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.27.0] - 2026-08-20
+
+Workstream W3. Turns two throwaway experiments into permanent tooling, so the
+next person asking "is this camera fixed?" or "does resolution matter?" measures
+it instead of rebuilding the experiment by hand.
+
+### Added
+
+- `scripts/footage_probe.py` - classifies any source as fixed / near-fixed /
+  pans / cuts by measurement rather than by its title. Samples one frame per
+  second, downscales to 320x180 grayscale, and phase-correlates consecutive
+  samples for the global translation. Reports median, p90, max, response and cut
+  count. Thresholds are justified in the module header: 0.15 px sits below the
+  estimator's own noise floor, and 1.0 px is roughly 6 px/s at 1080p - mount flex
+  rather than following play. Verified against the corpus: it reproduces all six
+  verdicts measured by hand.
+- `scripts/benchmark.py` - reproducible N-arm detection-quality comparison.
+  Two guards, both earned. It refuses to write `match_stats.json`,
+  `match_data.json`, `control.json` or `recorder.json`, because `PipelineConfig`
+  defaults to the first of those and a benchmark must never clobber real match
+  data; it drives the analyzer with `open()/step()/close(save=False)` so nothing
+  is written at all. And it re-execs under `caffeinate -i`, then independently
+  detects suspension by differencing `time.monotonic` against `time.time` -
+  reporting a warning instead of a plausible wrong number. Two earlier
+  measurements were silently destroyed by the machine sleeping mid-run, one
+  reporting 26,120 seconds for a job that took minutes.
+- `docs/FOOTAGE.md` - the standing rule that camera motion is measured and never
+  inferred from a title, the method, the threshold justifications, the seven-source
+  corpus, and the stale-yt-dlp trap.
+
+### Tests
+
+418 to 473.
+
+### Known limitation
+
+`footage_probe.py` classifies on the median, which can mask intermittent
+movement. `T2TAHYKo3UU` reads median 0.09 px but p90 6.26 and max 17.77 - it is
+mostly static with occasional real jumps, and a calibration would go stale across
+those. The p90 and max columns carry that information; the single-word verdict
+does not.
+
 ## [1.26.0] - 2026-08-20
 
 Workstream W5 of the wave-1 plan. Migrates the project to Python 3.13 and adds a
