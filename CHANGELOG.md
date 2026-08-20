@@ -23,6 +23,22 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.30.1] - 2026-08-20
+
+### Fixed
+
+- CI went red on the first run against Python 3.13: `audio_tracker.py` imports
+  `audioop` directly for its silence gate, and PEP 594 removed it in 3.13. The
+  v1.26.0 migration spotted the removal for SpeechRecognition and raised its
+  floor, but missed that our own code imports the same module - it passed
+  locally only because SpeechRecognition 3.11+ pulls `audioop-lts` in
+  transitively, and CI installs a narrower list. Now declared explicitly for
+  3.13+ in `requirements.txt` and installed in CI, because this import failing is
+  a collection error that takes the whole suite down rather than one test.
+- Swept the rest of the PEP 594 removals (aifc, cgi, chunk, crypt, imghdr,
+  nntplib, pipes, sunau, telnetlib, uu and the others) against the codebase.
+  `audioop` was the only one imported anywhere.
+
 ## [1.30.0] - 2026-08-20
 
 Workstream W1, and the reason the whole wave happened. The pipeline was

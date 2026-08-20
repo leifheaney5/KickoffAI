@@ -15,6 +15,13 @@
 SpeechRecognition>=3.11.0
 PyAudio>=0.2.14
 
+# audio_tracker.py imports audioop directly for its silence gate, so the PEP 594
+# removal hits our own code and not just SpeechRecognition. audioop-lts is the
+# maintained drop-in. Declared explicitly rather than relied on as a transitive
+# dependency of SpeechRecognition: CI installs a narrower list, and this import
+# failing is a collection error that takes the whole suite down.
+audioop-lts>=0.2.1 ; python_version >= "3.13"
+
 # Local transcription.
 # mlx-whisper is the Apple-Silicon-optimized path (uses the GPU / Neural Engine).
 # openai-whisper is the cross-platform fallback used automatically if mlx is unavailable.

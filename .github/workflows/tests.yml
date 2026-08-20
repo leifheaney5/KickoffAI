@@ -29,7 +29,8 @@ jobs:
           pip install \
             "SQLAlchemy>=2.0.0" "fpdf2>=2.7.0" "pillow>=11.0.0" \
             "pandas>=2.2.0" "requests>=2.32.0" "pytest>=8.0.0" \
-            "opencv-python-headless>=4.10.0"
+            "opencv-python-headless>=4.10.0" \
+            "audioop-lts>=0.2.1"
 
       - name: Check dependency freshness
         # Offline check. The vision extras aren't installed here, so this is
