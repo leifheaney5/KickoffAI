@@ -97,6 +97,164 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# --------------------------------------------------------------------------- #
+# Analysis profiles
+#
+# Inference size, not source resolution, is what decides whether the ball is
+# found at all. Three runs over the same 10-minute segment, one variable changed
+# at a time; the ball was detected in this share of processed frames:
+#
+#     360p  source, imgsz 960    ->   2.2%
+#     1080p source, imgsz 960    ->   6.6%
+#     1080p source, imgsz 1920   ->  33.2%
+#
+# quality.py grades a run `measured` at 35% ball detection and `indicative` at
+# 10%, so the first two arms are unusable and only the third is worth reporting.
+# Everything ball-dependent — possession, passes, sequences — collapses with
+# that rate, because the ball is only a handful of pixels to begin with.
+#
+# The two profiles below were then measured end to end over that same clip on an
+# M-series Mac (MPS, soccer_yolov8m_v1.pt), which is where their numbers come
+# from:
+#
+#     live (960px,  stride 6)  ->   6.6% ball, 0.88x real time, unusable
+#     post (1920px, stride 3)  ->  38.3% ball, 3.11x real time, measured
+#
+# So the two ends cannot be reconciled in one setting: the size that grades
+# measured is three times too slow to follow a live feed, and the size that
+# follows a live feed does not clear the 10% floor. Hence two named profiles,
+# chosen deliberately by the caller rather than one default that quietly fails
+# at both jobs.
+#
+# Note how little headroom live has — 0.88x real time on a local file with
+# nothing else running. It is real time, but not comfortably.
+# --------------------------------------------------------------------------- #
+LIVE_PROFILE = "live"
+POST_PROFILE = "post"
+DEFAULT_PROFILE = LIVE_PROFILE
+
+# Bounds for the `post` profile's auto-scaling.
+#
+# Upper bound. The source's own longest side is the ceiling worth paying for:
+# past native there is no extra detail, only upscaling, so the cap only bites on
+# footage above 1080p. Inference FLOPs are quadratic in imgsz; measured
+# end-to-end it came out softer than that — 1920 cost 1.8x per frame against
+# 960, because decode, tracking and team clustering do not scale with inference
+# size — but the direction holds and post already runs at 3.1x real time. 4K at
+# native on top of that turns a 90-minute match into most of a day. 1920 is also
+# the largest size anyone has measured here, and it is already 1.5x the 1280 the
+# weights were trained at, so gains above it are speculation while the cost is
+# not. Raise this only alongside a measurement that justifies it.
+#
+# Lower bound. 360p footage analysed at its own 640 would be worse than the live
+# profile. Below roughly 960 the ball is too few pixels whatever the source is,
+# so small footage is upscaled rather than run at a size that cannot work.
+POST_IMGSZ_MAX = 1920
+POST_IMGSZ_MIN = 960
+
+# YOLO wants the inference size to be a multiple of the model stride.
+# Ultralytics rounds silently; rounding here means the size we report and record
+# in run_quality is the size that actually ran.
+_IMGSZ_MULTIPLE = 32
+
+
+@dataclass(frozen=True)
+class AnalysisProfile:
+    """A named (imgsz, stride) pairing plus what it is honestly good for."""
+
+    name: str
+    detection_imgsz: int      # used as-is when the source size is unknown
+    frame_stride: int
+    scale_to_source: bool     # raise imgsz towards the footage's longest side
+    # The best grade this profile can be expected to reach — a ceiling, not a
+    # promise. quality.py decides the real one from what the run actually saw,
+    # and live in particular can and does land below its ceiling.
+    expected_grade: str
+    summary: str
+
+
+PROFILES = {
+    LIVE_PROFILE: AnalysisProfile(
+        name=LIVE_PROFILE,
+        detection_imgsz=960,
+        frame_stride=6,
+        scale_to_source=False,
+        expected_grade="indicative",
+        summary="Stays ahead of a live feed. The ball is missed on most frames "
+                "at this size, so possession and passing are directional at "
+                "best — on the 1080p clip measured here it saw the ball on 6.6% "
+                "of frames, below the floor for showing figures at all.",
+    ),
+    POST_PROFILE: AnalysisProfile(
+        name=POST_PROFILE,
+        detection_imgsz=POST_IMGSZ_MAX,
+        frame_stride=3,
+        scale_to_source=True,
+        expected_grade="measured",
+        summary="Runs at the footage's own resolution once the match is over. "
+                "Around three times slower than real time, and the only profile "
+                "that has reached a measured grade (38.3% on the same clip).",
+    ),
+}
+
+
+def get_profile(name: object = None) -> AnalysisProfile:
+    """Look up a profile by name. Empty or None gives the default."""
+    key = str(name or DEFAULT_PROFILE).strip().lower()
+    if key not in PROFILES:
+        raise ValueError(
+            f"Unknown analysis profile {name!r}; "
+            f"expected one of {sorted(PROFILES)}"
+        )
+    return PROFILES[key]
+
+
+def _round_imgsz(value: int) -> int:
+    """Round up to the next model-stride multiple, never below one stride."""
+    step = _IMGSZ_MULTIPLE
+    return max(step, -(-int(value) // step) * step)
+
+
+def profile_imgsz(profile: AnalysisProfile, source_longest_side: int = 0) -> int:
+    """The inference size ``profile`` should use for footage of this size.
+
+    A ``source_longest_side`` of 0 means the capture is not open yet, so there is
+    nothing to scale to and the profile's declared size stands.
+    """
+    longest = int(source_longest_side or 0)
+    if not profile.scale_to_source or longest <= 0:
+        return _round_imgsz(profile.detection_imgsz)
+    return _round_imgsz(min(POST_IMGSZ_MAX, max(POST_IMGSZ_MIN, longest)))
+
+
+def resolve_profile_settings(name: object = None, source_longest_side: int = 0,
+                             imgsz: Optional[int] = None,
+                             stride: Optional[int] = None) -> dict:
+    """Profile defaults with explicit overrides applied on top.
+
+    The overrides are what keeps existing command lines and saved feed settings
+    working: anything passed explicitly wins, anything omitted comes from the
+    profile.
+    """
+    profile = get_profile(name)
+    resolved_imgsz = profile_imgsz(profile, source_longest_side)
+    auto = profile.scale_to_source and int(source_longest_side or 0) > 0
+
+    if imgsz is not None and int(imgsz) > 0:
+        resolved_imgsz, auto = _round_imgsz(int(imgsz)), False
+    resolved_stride = profile.frame_stride
+    if stride is not None and int(stride) > 0:
+        resolved_stride = int(stride)
+
+    return {
+        "profile": profile.name,
+        "detection_imgsz": resolved_imgsz,
+        "frame_stride": max(1, resolved_stride),
+        "imgsz_auto": auto,
+        "expected_grade": profile.expected_grade,
+    }
+
+
 @dataclass
 class PipelineConfig:
     """All tunable parameters for a single match-analysis run."""
@@ -122,6 +280,10 @@ class PipelineConfig:
     detection_conf: float = 0.25
     detection_imgsz: int = 1280
     max_seconds: float = 0.0          # 0 = whole video (otherwise a debug cap)
+    # Which named profile produced the stride/imgsz above, when one did. Carried
+    # into run_quality so a grade can be read months later against the settings
+    # that earned it. Empty means the values were set by hand.
+    profile: str = ""
 
     # --- Pitch geometry (FIFA standard, metres) -------------------------- #
     pitch_length_m: float = 105.0
@@ -190,6 +352,23 @@ class PipelineConfig:
     def tracker_yaml(self) -> str:
         """The Ultralytics tracker config filename for `model.track(...)`."""
         return _TRACKER_YAML[self.tracker.strip().lower()]
+
+    def apply_profile(self, name: object = None, source_longest_side: int = 0,
+                      imgsz: Optional[int] = None,
+                      stride: Optional[int] = None) -> "PipelineConfig":
+        """Set stride/imgsz from a named profile, in place. Returns ``self``.
+
+        Callable twice: once before the capture is open (no source size, so the
+        profile's declared size stands) and again once the frame dimensions are
+        known, which is the only point at which `post` can scale to native.
+        """
+        chosen = resolve_profile_settings(
+            name, source_longest_side=source_longest_side,
+            imgsz=imgsz, stride=stride)
+        self.profile = chosen["profile"]
+        self.detection_imgsz = chosen["detection_imgsz"]
+        self.frame_stride = chosen["frame_stride"]
+        return self
 
     def sampled_fps(self, source_fps: float) -> float:
         """Effective frame rate after stride-based skipping."""

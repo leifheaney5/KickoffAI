@@ -29,6 +29,14 @@ MEASURED = "measured"
 INDICATIVE = "indicative"
 UNUSABLE = "unusable"
 
+# The analysis profile that produced a run, as recorded in `run_quality`. The
+# profiles themselves are defined in vision/config.py; the names are duplicated
+# here as plain strings so this module keeps its no-vision-imports property.
+# Runs predating profiles carry no field at all, so an empty value means
+# "unknown", never "live".
+LIVE_PROFILE = "live"
+POST_PROFILE = "post"
+
 # Ball-detection rate is the dominant factor: possession and passing are both
 # ball-dependent, so everything degrades with it. 0.35 is a starting point for
 # the pre-retrain model and is expected to move.
@@ -74,6 +82,7 @@ def assess(run_quality: dict) -> dict:
     ball = float(rq.get("ball_detection_rate", 0.0) or 0.0)
     reconnects = int(rq.get("reconnects", 0) or 0)
     calibrated = bool(rq.get("calibrated", False))
+    profile = str(rq.get("profile", "") or "")
 
     reasons = []
 
@@ -111,6 +120,15 @@ def assess(run_quality: dict) -> dict:
         reasons.append("calibrated, but the camera pans — the mapping goes stale, "
                        "so treat positions as image-space anyway")
 
+    # Naming the profile turns a grade into something interpretable months
+    # later. The live profile trades inference size for real time and is not
+    # expected to reach measured, so a short grade there is the design working
+    # rather than a fault — and the fix is a re-run, which is worth saying.
+    if profile == LIVE_PROFILE and verdict != MEASURED:
+        reasons.append("live profile, which gives up ball detection to keep up "
+                       "with the feed; re-run the recording on the post profile "
+                       "for a measured grade")
+
     return {
         "verdict": verdict,
         "label": VERDICT_LABEL[verdict],
@@ -121,6 +139,8 @@ def assess(run_quality: dict) -> dict:
         "reconnects": reconnects,
         "calibrated": calibrated,
         "fps": float(rq.get("fps", 0.0) or 0.0),
+        # "" for runs recorded before profiles existed.
+        "profile": profile,
     }
 
 

@@ -15,6 +15,10 @@ Run it:
         --video "https://www.youtube.com/watch?v=VjsRuzSu0qU" \
         --model soccer_yolov8m_v1.pt --device mps
 
+Sampling comes from --profile: `live` (the default) keeps ahead of a real-time
+feed, `post` runs a recording at its own resolution for full ball detection.
+Explicit --stride/--imgsz still override whichever profile is chosen.
+
 Stop it cleanly with Ctrl-C (or `kill <pid>`); it writes a final checkpoint and
 removes its PID file on exit.
 """
@@ -36,6 +40,7 @@ if _REPO_ROOT not in sys.path:
 
 from vision import MatchAnalyzer, PipelineConfig  # noqa: E402
 from vision import bridge as vbridge  # noqa: E402
+from vision.config import PROFILES, get_profile, resolve_profile_settings  # noqa: E402
 from vision.runtime import live_config  # noqa: E402
 from vision.schema import MatchStats  # noqa: E402
 
@@ -64,18 +69,28 @@ def write_snapshot(path: str, frame, detections, record) -> None:
     os.replace(tmp, path)
 
 
-def build_config(args) -> PipelineConfig:
-    """The live pipeline config, shared with the app via vision.runtime."""
-    return live_config(
+def build_config(args, source_longest_side: int = 0) -> PipelineConfig:
+    """The live pipeline config, shared with the app via vision.runtime.
+
+    The profile supplies stride and inference size. An explicit --stride/--imgsz
+    still wins, so command lines written before profiles existed behave exactly
+    as they did.
+    """
+    chosen = resolve_profile_settings(
+        args.profile, source_longest_side=source_longest_side,
+        imgsz=args.imgsz, stride=args.stride)
+    cfg = live_config(
         {
             "model": args.model,
             "device": args.device,
-            "imgsz": args.imgsz,
-            "stride": args.stride,
+            "imgsz": chosen["detection_imgsz"],
+            "stride": chosen["frame_stride"],
             "conf": args.conf,
         },
         output_path=args.stats,
     )
+    cfg.profile = chosen["profile"]
+    return cfg
 
 
 def start_recorder(path: str, source):
@@ -182,7 +197,9 @@ def checkpoint(analyzer: MatchAnalyzer, args, run_quality: dict = None,
     return 0
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI. Split out of :func:`main` so the wiring can be tested without
+    opening a capture or loading a model."""
     p = argparse.ArgumentParser(prog="live_vision")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--video", help="YouTube/stream URL or file path.")
@@ -191,8 +208,16 @@ def main(argv=None) -> int:
                           "would be read as a file path, so use this instead).")
     p.add_argument("--model", default="soccer_yolov8m_v1.pt", help="YOLO weights.")
     p.add_argument("--device", default="mps", help="'mps', 'cpu', '0', 'cuda'.")
-    p.add_argument("--stride", type=int, default=6, help="Process 1 of every N frames.")
-    p.add_argument("--imgsz", type=int, default=960, help="Inference image size.")
+    p.add_argument("--profile", default="live", choices=sorted(PROFILES),
+                   help="Analysis profile. 'live' keeps ahead of a real-time "
+                        "feed at the cost of ball detection; 'post' runs at the "
+                        "footage's own resolution, slower than real time, and "
+                        "is the only one that can grade as measured.")
+    p.add_argument("--stride", type=int, default=None,
+                   help="Process 1 of every N frames. Overrides the profile.")
+    p.add_argument("--imgsz", type=int, default=None,
+                   help="Inference image size. Overrides the profile, including "
+                        "'post' scaling to the source resolution.")
     p.add_argument("--conf", type=float, default=0.25, help="Detection confidence.")
     p.add_argument("--stats", default="match_stats.json", help="Vision stats output.")
     p.add_argument("--data-file", default="match_data.json", help="Dashboard events.")
@@ -223,7 +248,11 @@ def main(argv=None) -> int:
                         "stays valid for the whole match.")
     p.add_argument("--status-file", default="live_eye_status.json",
                    help="Small JSON health file the app polls for live chips.")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
 
     # A camera index must stay an int all the way down: resolve_video_source
     # treats the string "0" as a file path.
@@ -264,9 +293,23 @@ def main(argv=None) -> int:
     analyzer = MatchAnalyzer(cfg, homography=homography)
     print(f"[live] opening {source}", flush=True)
     analyzer.open(source)
+
+    # `post` can only scale to the footage's native size once the capture has
+    # reported its frame dimensions, so re-resolve here. Detection reads
+    # config.detection_imgsz per frame and nothing has been inferred yet, so
+    # updating the live config object is enough.
+    longest = max(int(getattr(analyzer, "_frame_w", 0) or 0),
+                  int(getattr(analyzer, "_frame_h", 0) or 0))
+    cfg.apply_profile(args.profile, source_longest_side=longest,
+                      imgsz=args.imgsz, stride=cfg.frame_stride)
+
+    profile = get_profile(args.profile)
     print(f"[live] source {analyzer._frame_w}x{analyzer._frame_h} "
           f"@ {analyzer._source_fps:.0f}fps; model={args.model} device={args.device}",
           flush=True)
+    print(f"[live] profile '{cfg.profile}': imgsz {cfg.detection_imgsz}, "
+          f"stride {cfg.frame_stride}; expect a "
+          f"'{profile.expected_grade}' grade. {profile.summary}", flush=True)
 
     from vision.sources import resolve_video_source
 
@@ -327,8 +370,13 @@ def main(argv=None) -> int:
                                  else "image"),
             "model": args.model,
             "device": args.device,
-            "stride": args.stride,
-            "imgsz": args.imgsz,
+            # The settings that actually ran, not what was asked for: the
+            # profile may have raised imgsz to the source resolution after the
+            # capture opened. A grade read months later is only interpretable
+            # against these.
+            "profile": cfg.profile,
+            "stride": cfg.frame_stride,
+            "imgsz": cfg.detection_imgsz,
             "source": str(source),
             "source_width": getattr(analyzer, "_frame_w", 0),
             "source_height": getattr(analyzer, "_frame_h", 0),
