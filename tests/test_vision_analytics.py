@@ -92,20 +92,61 @@ def test_collect_player_points_backfills_team_from_a_later_frame():
     assert len(rec["points"]) == 2
 
 
-def test_team_points_filters_per_frame_unlike_collect_player_points():
-    """Documents a real divergence between two 'points for a team' helpers.
+# --------------------------------------------------------------------------- #
+# Track-level team resolution
+# --------------------------------------------------------------------------- #
+def test_track_teams_is_none_until_the_track_is_ever_labelled():
+    doc = _stats([_frame(0, [_p("a", 10, 10, None)])])
+    assert analytics.track_teams(doc) == {"a": None}
 
-    collect_player_points (and so average_positions) backfills the team onto a
-    track's earlier sightings; team_points (and so the heatmaps) filters frame
-    by frame and drops them. The formation dots and the heatmap are therefore
-    computed over different point sets for any track labelled late.
+
+def test_track_teams_majority_beats_one_stray_frame():
+    """One mis-clustered frame must not decide a track's side."""
+    doc = _stats([
+        _frame(0, [_p("a", 10, 10, "Home")]),
+        _frame(1, [_p("a", 11, 10, "Away")]),   # blurred crop, wrong colour
+        _frame(2, [_p("a", 12, 10, "Home")]),
+    ])
+    assert analytics.track_teams(doc)["a"] == "Home"
+
+
+def test_track_teams_tie_goes_to_the_label_seen_first():
+    doc = _stats([
+        _frame(0, [_p("a", 10, 10, "Away")]),
+        _frame(1, [_p("a", 11, 10, "Home")]),
+    ])
+    assert analytics.track_teams(doc)["a"] == "Away"
+
+
+def test_team_points_and_average_positions_now_use_the_same_points():
+    """The heatmap and the formation dots must not disagree about a track.
+
+    They used to: collect_player_points backfilled the team onto a track's
+    earlier sightings, team_points filtered frame by frame and dropped them, so
+    a player whose colour was only pinned down partway through the run appeared
+    in the formation with three frames of history and in the heatmap with one.
+    Both now select on the track's resolved team.
     """
     doc = _stats([
         _frame(0, [_p("a", 10, 10, None)]),
-        _frame(1, [_p("a", 20, 20, "Away")]),
+        _frame(1, [_p("a", 20, 10, "Away")]),
+        _frame(2, [_p("a", 30, 10, "Away")]),
     ])
-    assert len(analytics.collect_player_points(doc)["a"]["points"]) == 2
-    assert len(analytics.team_points(doc, "Away")) == 1
+    heat = analytics.team_points(doc, "Away")
+    (dot,) = analytics.average_positions(doc, team="Away", min_frames=3)
+    assert len(heat) == dot["n"] == 3
+    assert heat[:, 0].mean() == pytest.approx(dot["x"])
+
+
+def test_team_shape_series_counts_a_player_before_his_colour_was_pinned():
+    """Frame 0 has two players on the pitch even if one is not labelled yet."""
+    doc = _stats([
+        _frame(0, [_p("a", 20, 50, None), _p("b", 60, 50, "Home")]),
+        _frame(1, [_p("a", 20, 50, "Home"), _p("b", 60, 50, "Home")]),
+    ])
+    rows = analytics.team_shape_series(doc, "Home")
+    assert [r["n"] for r in rows] == [2, 2]
+    assert rows[0]["centroid_x"] == pytest.approx(40.0)
 
 
 def test_team_points_none_team_returns_everyone():
@@ -120,6 +161,109 @@ def test_team_points_empty_still_has_two_columns():
 
 def test_player_points_unknown_id_is_empty_not_an_error():
     assert analytics.player_points(_stats([]), "nobody").shape == (0, 2)
+
+
+# --------------------------------------------------------------------------- #
+# What counts as a usable position
+#
+# One filter, used by every consumer in the module. The interesting cases only
+# become reachable once a homography is in play: an uncalibrated run divides
+# pixels by the frame size and so cannot leave 0..100 at all.
+# --------------------------------------------------------------------------- #
+def test_usable_xy_keeps_a_position_just_off_the_pitch():
+    """A throw-in taker is off the pitch and still where he really is."""
+    assert analytics.usable_xy(_p("a", 105.0, -4.0)) == (105.0, -4.0)
+
+
+def test_usable_xy_rejects_a_projection_from_beyond_the_horizon():
+    """A crowd detection lands hundreds of pitch-lengths away, not just outside."""
+    assert analytics.usable_xy(_p("a", 8400.0, 50.0)) is None
+    assert analytics.usable_xy(_p("a", 50.0, -1e6)) is None
+
+
+def test_usable_xy_rejects_nan_and_infinity():
+    assert analytics.usable_xy(_p("a", float("nan"), 50.0)) is None
+    assert analytics.usable_xy(_p("a", 50.0, float("inf"))) is None
+
+
+def test_usable_xy_needs_both_coordinates():
+    assert analytics.usable_xy(_p("a", 50.0, None)) is None
+    assert analytics.usable_xy(_p("a", None, 50.0)) is None
+    assert analytics.usable_xy({"id": "a"}) is None
+
+
+def test_one_off_pitch_projection_does_not_poison_the_centroid():
+    """The whole point of the filter: one bad point used to take the match with it.
+
+    Without it the mean of [30, 50, 8400] is 2826 and every downstream number --
+    centroid, compactness, average position, the analyst's digest -- is nonsense
+    for the entire match on the strength of a single frame.
+    """
+    doc = _stats([
+        _frame(0, [_p("a", 30, 50), _p("b", 50, 50), _p("c", 8400, 50)]),
+    ])
+    (row,) = analytics.team_shape_series(doc, "Home")
+    assert row["n"] == 2
+    assert row["centroid_x"] == pytest.approx(40.0)
+
+
+def test_a_nan_coordinate_does_not_nan_the_whole_average():
+    doc = _stats([
+        _frame(0, [_p("a", 10, 20)]),
+        _frame(1, [_p("a", float("nan"), 20)]),
+        _frame(2, [_p("a", 30, 20)]),
+        _frame(3, [_p("a", 20, 20)]),
+    ])
+    (row,) = analytics.average_positions(doc, min_frames=3)
+    assert row["n"] == 3
+    assert row["x"] == pytest.approx(20.0)
+
+
+def test_team_shape_series_skips_a_record_with_x_but_no_y():
+    """This raised TypeError before: only x was checked, then both were read."""
+    doc = _stats([
+        _frame(0, [_p("a", 20, 50), _p("b", 60, None), _p("c", 60, 50)]),
+    ])
+    (row,) = analytics.team_shape_series(doc, "Home")
+    assert row["n"] == 2
+
+
+def test_territory_ignores_an_off_pitch_projection():
+    doc = _stats([
+        _frame(0, [_p("h1", 10, 50, "Home"), _p("h2", 8400, 50, "Home")]),
+    ])
+    terr = analytics.territory(doc)["Home"]
+    assert terr["defensive"] == pytest.approx(1.0)
+
+
+def test_the_filter_is_inert_on_an_uncalibrated_run():
+    """Nothing an uncalibrated run can produce is dropped, so nothing changes.
+
+    Image-space coordinates are pixels over the frame size, so they span 0..100
+    plus whatever a detection box overhanging the frame edge adds -- units, not
+    orders of magnitude. If this ever fails, the filter has started editing runs
+    it was never meant to touch.
+    """
+    doc = _stats([
+        _frame(0, [_p("a", 0.0, 0.0), _p("b", 100.0, 100.0), _p("c", 50.0, 50.0),
+                   _p("d", -3.0, 104.0)]),
+    ])
+    assert len(analytics.team_points(doc, "Home")) == 4
+
+
+# --------------------------------------------------------------------------- #
+# Direction helpers
+# --------------------------------------------------------------------------- #
+def test_is_advancing_flips_for_away_and_with_the_flag():
+    assert analytics.is_advancing("Home", True) is True
+    assert analytics.is_advancing("Away", True) is False
+    assert analytics.is_advancing("Home", False) is False
+    assert analytics.is_advancing("Away", False) is True
+
+
+def test_attack_relative_measures_from_the_team_s_own_end():
+    assert analytics.attack_relative(80.0, advancing=True) == pytest.approx(80.0)
+    assert analytics.attack_relative(80.0, advancing=False) == pytest.approx(20.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +329,24 @@ def test_average_positions_exact_mean_and_spread():
     assert row["n"] == 3
     # population std of [10,30,20] = sqrt(200/3); y std is 0, so spread == x std
     assert row["spread"] == pytest.approx(math.sqrt(200 / 3))
+
+
+def test_average_positions_single_sighting_has_zero_spread_not_nan():
+    """min_frames=1 admits a one-point track; its std is 0, not a divide."""
+    doc = _stats([_frame(0, [_p("a", 42.0, 17.0)])])
+    (row,) = analytics.average_positions(doc, min_frames=1)
+    assert row["n"] == 1
+    assert (row["x"], row["y"]) == (42.0, 17.0)
+    assert row["spread"] == 0.0
+
+
+def test_team_shape_series_zero_spread_is_zero():
+    """Everyone stacked on one point: compactness 0, both spreads 0."""
+    doc = _stats([_frame(0, [_p("a", 50, 50), _p("b", 50, 50), _p("c", 50, 50)])])
+    (row,) = analytics.team_shape_series(doc, "Home")
+    assert row["compactness"] == 0.0
+    assert row["spread_length"] == 0.0
+    assert row["spread_width"] == 0.0
 
 
 def test_average_positions_team_filter_uses_the_backfilled_team():
@@ -304,6 +466,17 @@ def test_hotspot_zone_lateral_is_also_attack_relative():
     assert analytics.hotspot_zone(pts, advancing=False) == "defensive third / right"
 
 
+def test_hotspot_zone_works_from_a_single_point():
+    """A 3x3 grid with one occupied cell still has an unambiguous argmax."""
+    assert analytics.hotspot_zone([(10.0, 90.0)], advancing=True) == (
+        "defensive third / right"
+    )
+
+
+def test_hotspot_zone_is_none_when_every_point_is_off_pitch():
+    assert analytics.hotspot_zone([(8400.0, 50.0)], advancing=True) is None
+
+
 def test_hotspot_zone_central_band_is_unaffected_by_direction():
     pts = [(50.0, 50.0)] * 5
     assert analytics.hotspot_zone(pts, advancing=True).endswith("/ central")
@@ -332,10 +505,57 @@ def test_spatial_summary_handles_an_empty_run_without_raising():
 def test_spatial_summary_compares_the_two_teams():
     doc = _stats([
         _frame(0, [
-            _p("h1", 60, 48, "Home"), _p("h2", 64, 52, "Home"),   # tight, high
-            _p("a1", 10, 10, "Away"), _p("a2", 40, 90, "Away"),   # loose, deep
+            _p("h1", 60, 48, "Home"), _p("h2", 64, 52, "Home"),   # tight
+            _p("a1", 10, 10, "Away"), _p("a2", 40, 90, "Away"),   # loose
         ]),
     ], space="pitch")
     text = analytics.spatial_summary(doc)
     assert "Home held the more compact shape" in text
-    assert "Home had the higher average line" in text
+    # Home's centroid x is 62, Away's is 25, and Away attacks towards x=0 -- so
+    # Away sits 75 up the pitch from its own goal line against Home's 62. Away
+    # has the higher line despite the smaller x.
+    assert "Away had the higher average line" in text
+
+
+def test_spatial_summary_higher_line_is_not_just_the_bigger_x():
+    """The absolute-vs-relative bug, isolated.
+
+    Both teams are camped on the same touchline half. Home (attacking x=100)
+    averages x=30, so it is 30 up the pitch. Away (attacking x=0) averages
+    x=20, so it is 80 up the pitch and has much the higher line. Comparing raw
+    centroid_x picks Home, which is the deeper of the two.
+    """
+    doc = _stats([
+        _frame(0, [
+            _p("h1", 20, 50, "Home"), _p("h2", 40, 50, "Home"),   # centroid x 30
+            _p("a1", 10, 50, "Away"), _p("a2", 30, 50, "Away"),   # centroid x 20
+        ]),
+    ], space="pitch")
+    assert "Away had the higher average line" in analytics.spatial_summary(doc)
+
+
+def test_spatial_summary_reports_position_attack_relative():
+    """Away's centroid x=25 is reported as 75 up-pitch, matching its territory."""
+    doc = _stats([
+        _frame(0, [_p("a1", 20, 40, "Away"), _p("a2", 30, 40, "Away")]),
+    ], space="pitch")
+    text = analytics.spatial_summary(doc)
+    assert "avg position 75 up-pitch / 60 across" in text
+
+
+def test_spatial_summary_survives_a_team_of_identical_points():
+    """Zero spread everywhere: no divide, no NaN, and the digest still renders."""
+    doc = _stats([
+        _frame(0, [_p("a", 50, 50), _p("b", 50, 50), _p("c", 50, 50)]),
+    ], space="pitch")
+    text = analytics.spatial_summary(doc)
+    assert "compactness 0.0" in text
+    assert "nan" not in text.lower()
+
+
+def test_spatial_summary_survives_a_single_tracked_player():
+    """One player has no shape, so there is no team line -- but no crash either."""
+    doc = _stats([_frame(0, [_p("a", 50, 50)])], space="pitch")
+    text = analytics.spatial_summary(doc)
+    assert "1 tracked player-ids" in text
+    assert "Home:" not in text

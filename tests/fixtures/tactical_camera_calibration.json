@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "created": "2026-08-20 00:00:00",
+  "source": "SYNTHETIC - not measured from footage. Exact pinhole projection of a 105x68 m pitch: camera 24 m up, 20 m behind the near touchline, level with the right-hand penalty box, no pan or roll, tilted down 36.87 deg (sin 0.6 / cos 0.8), focal 1200 px, principal point (960, 540). See docs/SPATIAL_VALIDATION.md.",
+  "frame_size": [
+    1920,
+    1080
+  ],
+  "camera_m": {
+    "pitch_length_m": 105.0,
+    "pitch_width_m": 68.0,
+    "position": [
+      84.0,
+      88.0,
+      24.0
+    ],
+    "tilt_sin_cos": [
+      0.6,
+      0.8
+    ],
+    "focal_px": 1200.0,
+    "principal_point_px": [
+      960.0,
+      540.0
+    ]
+  },
+  "points": [
+    {
+      "label": "Right box front x top",
+      "norm": [
+        84.28571428571429,
+        20.352941176470587
+      ],
+      "px": [
+        1033.2421875,
+        128.28125000000017
+      ]
+    },
+    {
+      "label": "Top-right corner",
+      "norm": [
+        100.0,
+        0.0
+      ],
+      "px": [
+        1257.1698113207547,
+        64.52830188679258
+      ]
+    },
+    {
+      "label": "Bottom-right corner",
+      "norm": [
+        100.0,
+        100.0
+      ],
+      "px": [
+        1788.9473684210527,
+        824.2105263157896
+      ]
+    },
+    {
+      "label": "Right box front x bottom",
+      "norm": [
+        84.28571428571429,
+        79.6470588235294
+      ],
+      "px": [
+        1090.2083333333333,
+        508.0555555555556
+      ]
+    }
+  ]
+}
