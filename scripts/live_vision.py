@@ -237,7 +237,31 @@ def main(argv=None) -> int:
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
     cfg = build_config(args)
-    analyzer = MatchAnalyzer(cfg)
+
+    # A fixed camera keeps one calibration valid for the whole match, so load it
+    # here and hand it to the analyzer. Without this the run reports "image"
+    # space no matter what has been calibrated, and every spatial metric
+    # downstream is in frame pixels rather than pitch metres.
+    homography = None
+    if args.fixed_camera:
+        from vision import calibration as vcal
+
+        cal = vcal.load_calibration()
+        if cal is None:
+            print("[live] --fixed-camera set but no calibration is saved; "
+                  "coordinates stay in image space. Calibrate on Camera & Feed.",
+                  flush=True)
+        else:
+            try:
+                homography = vcal.homography_from_calibration(cal)
+                print(f"[live] pitch calibration loaded "
+                      f"({len(cal['points'])} points); coordinates are pitch metres",
+                      flush=True)
+            except (ValueError, KeyError) as exc:
+                print(f"[live] calibration unusable ({exc}); staying in image space",
+                      flush=True)
+
+    analyzer = MatchAnalyzer(cfg, homography=homography)
     print(f"[live] opening {source}", flush=True)
     analyzer.open(source)
     print(f"[live] source {analyzer._frame_w}x{analyzer._frame_h} "

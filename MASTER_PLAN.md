@@ -1,6 +1,6 @@
 # Master plan — Kickoff Pulse as a football intelligence engine
 
-Merges `EYE_PLAN.md` (ingest + live analytics + the stat programme) with the
+Merges `docs/archive/EYE_PLAN.md` (ingest + live analytics + the stat programme) with the
 Opta-style analytics platform specification. Supersedes both.
 
 **The specification is adopted in full on architecture and discipline, and
@@ -148,13 +148,13 @@ for the retrain.
 
 ## 6. Phases
 
-Merges the specification's nine phases with `EYE_PLAN.md`'s ingest work.
+Merges the specification's nine phases with `docs/archive/EYE_PLAN.md`'s ingest work.
 **Phase 0 is new and comes first** — it fixes defects that corrupt everything
 downstream.
 
 ### Phase 0 — Ingest correctness · *nothing is trustworthy until this lands*
 
-From `EYE_PLAN.md`. Two live defects:
+From `docs/archive/EYE_PLAN.md`. Two live defects:
 
 1. **Timestamps drift by the length of every stream outage.** `t_sec =
    _raw_index / fps` counts frames *received*, not time *elapsed*: a 60 s dropout
@@ -213,7 +213,7 @@ run value matters: **player value must not be restricted to touches.**
 ### Phase 8 — Live analytics
 
 Incremental update rather than recomputation (§58), live xG/xT/momentum,
-transparent momentum (§59), live alerts. Merges `EYE_PLAN.md` Tier 2.
+transparent momentum (§59), live alerts. Merges `docs/archive/EYE_PLAN.md` Tier 2.
 
 ### Phase 9 — Hardening
 

@@ -236,7 +236,11 @@ def territory(stats: dict, home_attacks_positive_x: bool = True) -> Dict[str, di
 def _zone_label(cx_idx: int, cy_idx: int, advancing: bool) -> str:
     thirds = (["defensive", "middle", "attacking"] if advancing
               else ["attacking", "middle", "defensive"])
-    lateral = ["left", "central", "right"]
+    # Flank flips with direction for the same reason the thirds do: a team
+    # attacking the other way sees the same touchline on its other hand. Left
+    # here always means the team's own left, never a fixed side of the frame.
+    lateral = (["left", "central", "right"] if advancing
+               else ["right", "central", "left"])
     return f"{thirds[cx_idx]} third / {lateral[cy_idx]}"
 
 

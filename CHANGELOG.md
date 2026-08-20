@@ -23,6 +23,66 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.24.0] - 2026-08-20
+
+Validation plan Track B and Track D. The spatial half of the product had 305
+lines and 16 functions with no tests, and had never once been fed calibrated
+input; two real bugs were hiding in that gap.
+
+### Fixed
+
+- **`--fixed-camera` was parsed and reported but never applied.** The live runner
+  built `MatchAnalyzer(cfg)` with no homography, so every live run reported
+  `coordinate_space: image` however carefully the pitch had been calibrated. A
+  missing calibration file was only half the reason the spatial layer had never
+  run - the other half was that the runner could not have used one. It now loads
+  the saved calibration, says so on stdout, and says so just as clearly when the
+  flag is set with nothing saved or with a calibration it cannot use.
+- **Flank labels were not attack-relative.** `_zone_label` flipped the thirds for
+  a team attacking the other way but left `left`/`central`/`right` fixed to the
+  frame, so a single label mixed a team-relative third with an absolute
+  touchline. "Attacking third / left" named the wrong wing for one of the two
+  teams, in the digest handed to the AI analyst.
+
+### Added
+
+- `tests/test_vision_analytics.py` - 34 known-answer tests over all 16 functions
+  in `vision/analytics.py`. Expected values are computed by hand rather than
+  captured from a run, so the suite fails when the maths changes rather than when
+  the output changes. Covers heatmap axis order and out-of-range clipping, the
+  min-frames noise floor, exact shape geometry, attack-relative territory, and
+  the uncalibrated warning.
+- `tests/test_calibration.py` - 15 tests over the picked-points to pitch-metres
+  chain, against a sideline trapezoid whose correct output is derivable by hand.
+  The strongest is the perspective invariant: the image centre column must map to
+  pitch x=52.5 m at every image height, which an affine fit or a transposed
+  matrix would break. Foreshortening is checked too - image mid-height maps to
+  pitch 62.5, not 50; a linear stretch would look plausible on a heatmap while
+  being wrong by 12 metres.
+- CI installs `opencv-python-headless` so the homography maths is checked there
+  rather than only on a dev box. The tests skip cleanly where OpenCV is absent.
+- Documented divergence: `collect_player_points` backfills a track's team onto
+  its earlier sightings while `team_points` filters frame by frame, so the
+  formation dots and the heatmap are computed over different point sets for any
+  track labelled late. Left as-is and pinned by a test rather than changed, since
+  either behaviour is defensible.
+
+### Changed
+
+- Nine spent plan documents moved to `docs/archive/` with a README mapping each
+  to the version that shipped it. Fourteen plans at the root had become hard to
+  navigate and at least one contradicted another on sequencing; five stay live.
+  Archived rather than deleted - they record why decisions were made, which
+  outlives the plan.
+- Test count 323 to 372.
+
+### Still open
+
+No calibration has yet been run against real video, so `coordinate_space` has
+still never read `pitch` on a match. The path is now proven and tested; it needs
+footage worth pointing it at - Track A (a 1080p Veo export) or Track C (a fixed
+camera).
+
 ## [1.23.1] - 2026-08-19
 
 Two defects found by running a real 99-minute match through the pipeline.

@@ -94,24 +94,45 @@ regardless of pixels, and the retrain becomes the whole game.
 **Known limitation:** it pans, so calibration and identity stay broken. This
 track buys the ball, not the geometry.
 
-## Track B — Validate the spatial layer · available today · no new footage
+## Track B — Validate the spatial layer · MOSTLY DONE v1.24.0
 
-The tactical-cam material is the first footage we have where a fixed-camera
-calibration is actually valid. Use it to test the untested half.
+Done, with the approach changed once it met reality:
 
-1. Grab a frame and complete the four-point calibration — the first time that
-   workflow will have been run end to end.
-2. Analyse a segment and confirm `coordinate_space` comes back **`pitch`**, not
-   `image`. That single line has never been true.
-3. Check the spatial outputs against the video by eye: does the defensive line
-   sit where it looks like it sits, does compactness tighten when the team
-   compresses, does territory move when play does.
-4. **Write tests for `vision/analytics.py`** — 16 functions, currently zero.
-5. Fix whatever is wrong. Some of it will be.
+Picking pitch landmarks by eye from a 640x360 still is guesswork, and a sloppy
+homography would have been blamed on the analytics. So the layer was validated
+against **known-answer synthetic geometry** instead — a sideline trapezoid whose
+correct output can be derived by hand — which tests the maths far harder than one
+hand-clicked calibration would have.
 
-**Why now:** this closes the largest unvalidated surface in the product, needs
-nothing from anyone, and half the Team Shape page may have been quietly wrong for
-months.
+- **49 tests added** across `vision/analytics.py` (16 functions, previously zero)
+  and `vision/calibration.py`. Every expected value is computed by hand, not
+  captured from a run, so the suite fails when the maths changes rather than when
+  the output changes.
+- **The homography is correct.** Corners land on corners; the image centre column
+  maps to pitch x=52.5 m at *every* image height (an affine fit or a transposed
+  matrix would break this); and foreshortening is real — image mid-height maps to
+  pitch 62.5, not 50. A linear stretch would have looked plausible on a heatmap
+  while being wrong by 12 metres.
+
+Two genuine bugs found and fixed:
+
+1. **`--fixed-camera` was never applied.** The flag was parsed and reported in
+   the status file, but the live runner built `MatchAnalyzer(cfg)` with no
+   homography. *Every live run would have reported image space however carefully
+   the pitch had been calibrated* — so the missing calibration file was only half
+   the reason the spatial layer had never run.
+2. **Flank labels were not attack-relative.** `_zone_label` flipped the thirds for
+   a team attacking the other way but not left/right, so a label mixed a
+   team-relative third with an absolute touchline: "attacking third / left" named
+   the wrong wing for one of the two teams, in the digest handed to the analyst.
+
+CI now installs `opencv-python-headless` so the geometry is checked there too,
+rather than only on a dev box.
+
+**Still open — needs Track A or C footage:** no calibration has yet been run
+against real video, so `coordinate_space` has still never actually read `pitch`
+on a match. The path is now proven and tested; it needs footage worth pointing it
+at.
 
 ## Track C — A fixed camera for one match · one weekend
 
@@ -137,21 +158,21 @@ Two things work in our favour:
 Record one match. Compare against Tracks A and B. Then decide whether the
 Raspberry Pi rig (Stage 1) is worth building at all.
 
-## Track D — Consolidate the plans · small · overdue
+## Track D — Consolidate the plans · DONE v1.24.0
 
-There are now **fourteen plan documents**. Several are superseded and one
-contradicts another on sequencing. Fold them:
+There were **fourteen plan documents**; several were superseded and one
+contradicted another on sequencing. Nine are now archived under
+`docs/archive/`, with a README mapping each to the version that shipped it —
+they record why decisions were made, which outlives the plan itself. Five
+remain live:
 
-| Keep | Fold into it |
+| Live plan | Scope |
 |---|---|
-| `MASTER_PLAN.md` | `EYE_PLAN.md`, `E2E_DEVELOPMENT_PLAN.md`, `FEATURES_PLAN.md` |
-| `PRODUCT_VISION.md` | — (strategy; stays) |
-| `HARDWARE_PROPOSAL.md` | — (referenced by Track C) |
-| `VALIDATION_PLAN.md` | — (this; the current operational plan) |
-| `PHASE6_VISION_PLAN.md` | keep until the retrain lands, then fold |
-
-Archive the rest under `docs/archive/` rather than deleting: they record why
-decisions were made, which is worth keeping even when the plan is spent.
+| `VALIDATION_PLAN.md` | This — the current operational plan |
+| `MASTER_PLAN.md` | The analytics engine, phases 4-9 |
+| `PRODUCT_VISION.md` | Where the product is going, and for whom |
+| `HARDWARE_PROPOSAL.md` | Owning capture end to end (Track C) |
+| `PHASE6_VISION_PLAN.md` | The detector retrain; folds into MASTER_PLAN once it lands |
 
 ---
 
