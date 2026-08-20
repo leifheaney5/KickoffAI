@@ -55,8 +55,10 @@ class RoboflowDetector:
             from inference_sdk import InferenceHTTPClient
         except ImportError as exc:  # pragma: no cover - dependency guard
             raise ImportError(
-                "inference-sdk is required for the Roboflow backend: "
-                "pip install inference-sdk"
+                "inference-sdk is required for the Roboflow backend, and it "
+                "does not support Python 3.13 (every release up to 1.4.1 caps "
+                "at <3.13). Run this backend from a separate 3.12 environment, "
+                "or use the default local Ultralytics detector."
             ) from exc
         try:
             import supervision as sv

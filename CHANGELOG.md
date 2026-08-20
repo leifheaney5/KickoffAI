@@ -23,6 +23,62 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.26.0] - 2026-08-20
+
+Workstream W5 of the wave-1 plan. Migrates the project to Python 3.13 and adds a
+guard against the failure mode that made the migration urgent.
+
+### Why
+
+The venv was Python 3.9.6. yt-dlp dropped 3.9, so `pip install --upgrade yt-dlp`
+kept it pinned at an October 2025 build and reported success. That extractor
+could only resolve 360p from YouTube, which produced a documented and wrong
+conclusion - that YouTube was capped at 360p by PO-token gating - and misdirected
+the roadmap for weeks. A current yt-dlp resolves 1080p and 4K on the identical
+URLs. pip does not fail on an old interpreter; it quietly resolves the newest
+build that still supports it.
+
+### Changed
+
+- Python 3.13 is now a hard floor. `kickoff.sh` pins `python3.13` explicitly; a
+  bare `python3` still resolves to 3.9 on macOS, which is how this started.
+- Version floors raised across `requirements.txt` and `vision/requirements.txt`,
+  each with the reason in a comment. Notably `SpeechRecognition>=3.11.0`, because
+  3.13 removed `aifc`, `audioop` and `chunk` from the stdlib under PEP 594 and
+  older releases import them directly.
+- CI runs on Python 3.13, with a dependency check ahead of pytest.
+- The Roboflow backend's ImportError now says the dependency is incompatible with
+  3.13 rather than suggesting a `pip install` that cannot succeed.
+
+### Added
+
+- `depcheck.py` - offline dependency-freshness check on three signals:
+  interpreter against floor, versions against floors, and age for date-versioned
+  tools. yt-dlp is judged on age rather than a version floor, because its version
+  string is its release date; the rule maintains itself instead of needing a
+  hand-updated "known good" value that would rot exactly like the thing it
+  guards. Exits non-zero. Runs at launch from `kickoff.sh`, warning by default
+  and failing hard under `KICKOFF_STRICT_DEPS=1`.
+- 24 tests for it, none touching the network.
+
+### Not installable on 3.13
+
+`inference-sdk` caps at `<3.13` in every release through 1.4.1, so the optional
+`--roboflow-model` backend is unavailable on 3.13. Impact is contained: the
+import is already lazy behind a guard, so the rest of the Eye is unaffected. Run
+that backend from a separate 3.12 environment if needed.
+
+### Untested rather than broken
+
+pandas moved 2.x to 3.0 and OpenCV 4.x to 5.0 - both major versions. The suite
+passes, but it is mostly pure logic; real footage has not yet gone through the CV
+pipeline on 3.13. `requirements.lock` still holds the 3.9 resolution and needs
+regenerating from a 3.13 venv.
+
+### Tests
+
+394 to 418.
+
 ## [1.25.0] - 2026-08-20
 
 Finishing what could be finished without match footage: the join between the
