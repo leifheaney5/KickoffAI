@@ -24,9 +24,16 @@ passes and no possession split.
 
 Three conclusions, each measured rather than argued:
 
-**Resolution is the binding constraint.** Every YouTube source is capped at 360p
-here — six player clients tested, only `android` resolves at all, and it tops out
-at 360p. At 640×360 the ball is one to three pixels across. No model finds that.
+**Resolution is the binding constraint.** At 640x360 the ball is one to three
+pixels across and no model finds it.
+
+> **Superseded 2026-08-20.** This section originally read "every YouTube source is
+> capped at 360p here - six player clients tested". That was wrong, and it is left
+> visible rather than quietly edited because the error shaped three plans. The cap
+> was a **stale yt-dlp**: the venv ran Python 3.9, yt-dlp had dropped 3.9, and pip
+> silently held a 10-month-old build while reporting success. A current build
+> resolves 1080p and 4K on the identical URLs. Six player clients were tested when
+> the variable was the tool's age. See `docs/FOOTAGE.md` and `depcheck.py`.
 
 **Framing trades the ball against everything else.** A wide fixed shot fixes
 cuts (19% → 0%), improves player detection (10.2 → 15.5 per frame) and halves
@@ -235,3 +242,60 @@ shows, because it is the only route to valid geometry. D is housekeeping.
    matter?** Probably yes for jersey numbers and identity — but it stops being
    the thing blocking everything else, and the roadmap should be rewritten to say
    so.
+
+---
+
+## Outcome — wave 1, 2026-08-20 (v1.26.0 through v1.30.1)
+
+Executed as five parallel worktree agents. Tests 394 to 562; CI green on Python
+3.13. Your match files were byte-identical throughout.
+
+**Track A answered, and the answer was neither option offered.** The question was
+"model or resolution?" It was resolution, but the binding limit was ours, not
+YouTube's: inference downscaled every frame to 960 px. Same footage, same model:
+
+| source | `imgsz` | ball | grade |
+|---|---:|---:|---|
+| 640x360 | 960 | 2.2% | unusable |
+| 1920x1080 | 960 | 6.6% | unusable |
+| 1920x1080 | 1920 | **38.3%** | **measured** |
+
+The detector retrain that `PHASE6_VISION_PLAN.md` blocked on since June was never
+the keystone. It is still wanted for jersey numbers and identity; it does not
+unblock the ball.
+
+**Track B mostly closed.** Three further defects in the spatial layer, all the
+same family as the flank bug - a team-relative claim computed in an absolute
+frame. Identity permanence went from zero tests to 27, with the fragmenting cause
+characterised before anything was tuned. Still open: no calibration has run
+against real match video, so `coordinate_space` has never read `pitch`.
+
+**Track C unchanged.** Still needs a camera at height. `2ZKZwKKiCL8` in
+`docs/FOOTAGE.md` is a genuinely fixed 4K amateur match - useful as a stand-in.
+
+**Track D done.** Nine plans archived under `docs/archive/`.
+
+### The new critical path
+
+A `measured` grade does not yet produce measured possession. The `post` run
+detects the ball in 38.3% of frames and still yields **0 passes and 0/0
+possession** - every ball frame reads `loose`. Measured directly: the median
+ball-to-nearest-player distance is 6.91 pseudo-metres and only 4.9% of ball
+frames fall inside `possession_radius_m = 1.5`.
+
+An uncalibrated run has no metres. `_project` maps image coordinates onto a
+nominal 105x68 pitch whatever fraction of it is in frame, with no perspective
+correction, so a metre-denominated threshold cannot mean the same thing in two
+parts of the image. **Calibration now blocks possession and passing**, which
+reverses the priority this plan opened with.
+
+### Wave 2, in evidence order
+
+1. Calibrate against real footage - `docs/SPATIAL_VALIDATION.md` has the procedure
+2. Pitch-polygon filter on detections before `identities.update()` - two
+   workstreams converged on this independently; it addresses identity churn and
+   off-pitch projections at once
+3. Make `vision/heuristics.py` thresholds calibration-aware
+4. `vision/schema.py:player_token` - one player becomes several ids as team and
+   jersey labels firm up
+5. Re-benchmark at 4K on `2ZKZwKKiCL8`

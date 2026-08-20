@@ -23,6 +23,17 @@ history. Those entries include the source commit hash.
 
 - No unreleased changes.
 
+## [1.30.2] - 2026-08-20
+
+### Changed
+
+- `VALIDATION_PLAN.md` corrected and closed out with the wave-1 outcome. The
+  disproven "every YouTube source is capped at 360p" claim is struck through in
+  place rather than quietly deleted, because that error shaped three planning
+  documents and the correction is more useful than a clean page.
+- Recorded the new critical path: calibration now blocks possession and passing,
+  which reverses the priority the plan opened with.
+
 ## [1.30.1] - 2026-08-20
 
 ### Fixed
