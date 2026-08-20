@@ -4,24 +4,43 @@
 #
 #   pip install -r requirements.txt -r vision/requirements.txt
 #
+# Python 3.13 is required, same as the base app. See the note at the top of
+# requirements.txt for why an older interpreter is worse than an error.
+#
 # For CUDA-accelerated inference, install a matching PyTorch build FIRST, e.g.:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 # (CPU-only torch is pulled in automatically by ultralytics if you skip this.)
 
-ultralytics>=8.2.0        # YOLOv8/v11 detection + BoT-SORT / ByteTrack tracking
-opencv-python>=4.9.0      # video decode, homography, debug overlay
-numpy>=1.24.0
-scikit-learn>=1.3.0       # K-Means torso-colour team clustering
+ultralytics>=8.3.0        # YOLOv8/v11 detection + BoT-SORT / ByteTrack tracking
+opencv-python>=4.10.0     # video decode, homography, debug overlay
+numpy>=2.1.0              # 2.0.2 was the last build 3.9 could install
+torch>=2.9.0              # 2.8.0 was the last build 3.9 could install
+scikit-learn>=1.5.0       # K-Means torso-colour team clustering
 easyocr>=1.7.0            # local, offline jersey-number OCR
-supervision>=0.20.0       # detection/track utils, annotators, sample assets
-yt-dlp>=2024.04.09        # resolve YouTube live/watch URLs to OpenCV stream URLs
+supervision>=0.25.0       # detection/track utils, annotators, sample assets
+
+# Resolves YouTube live/watch URLs to OpenCV stream URLs. The floor is high on
+# purpose: extractors rot on a clock, and a stale yt-dlp does not error, it just
+# returns fewer and lower-quality formats. A floor alone cannot keep this fresh
+# though, so `depcheck.py` flags the installed build once it passes 90 days.
+yt-dlp>=2026.1.1
 
 # Optional — Roboflow hosted/local model backend + per-frame pitch homography.
-inference-sdk>=0.9.0      # run Roboflow soccer models (player + pitch keypoints)
+#
+# NOT INSTALLABLE ON PYTHON 3.13. Every inference-sdk release up to the current
+# 1.4.1 declares Requires-Python >=3.10,<3.13, so pip cannot resolve it here at
+# all. vision/roboflow_backend.py already imports it lazily and raises a clear
+# message, so the rest of the Eye is unaffected — only `--roboflow-model` is.
+# If you need that backend today, run it from a separate 3.12 environment.
+# Re-add this line once upstream ships 3.13 support:
+#   inference-sdk>=0.9.0
+#
 # Pitch homography reuses Roboflow's reference pitch config + view transformer.
 # Not on PyPI — install from git when you want --pitch-model:
 #   pip install git+https://github.com/roboflow/sports.git
 
 # Optional — only needed to TRAIN a soccer model with vision/train.py
 # (download datasets from https://universe.roboflow.com/browse/sports/soccer).
-roboflow>=1.1.0           # Roboflow Universe dataset download
+# Verified on 3.13, but note it pins numpy below the latest, so install it in a
+# training-only environment rather than alongside a match-day one.
+roboflow>=1.4.0           # Roboflow Universe dataset download

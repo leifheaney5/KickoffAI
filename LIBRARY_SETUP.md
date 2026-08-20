@@ -5,6 +5,21 @@ is the intended backend for live use (via Docker). Without it, the lower-level
 Python modules can still fall back to a local SQLite file for development, but
 the normal app launcher requires Postgres unless you explicitly opt into SQLite.
 
+## Before anything: Python 3.13
+
+Every command below assumes a Python 3.13 virtualenv. 3.13 is a floor, not a
+preference — older interpreters install everything "successfully" and then hand
+you silently older packages (see the README's *Why Python 3.13*). `psycopg` and
+`SQLAlchemy` both need current builds to have working 3.13 wheels.
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+```
+
+Check an existing environment at any time with `python depcheck.py`.
+
 ## Quick start (SQLite, no Docker)
 
 Nothing to install beyond the Python deps. The library uses `library.db` in the

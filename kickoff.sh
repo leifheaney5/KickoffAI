@@ -37,9 +37,22 @@ echo "================================================================"
 # --------------------------------------------------------------------------- #
 # 1. Python virtualenv + dependencies
 # --------------------------------------------------------------------------- #
+# Pin the interpreter explicitly. `python3` is whatever the OS happens to point
+# at, and on macOS that is still often 3.9 — old enough that pip silently
+# resolves archived builds of yt-dlp/numpy/torch and calls it a success.
+PYTHON_BIN="${KICKOFF_PYTHON:-python3.13}"
+
 if [ ! -d "$VENV_DIR" ]; then
+  if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    red "✗ $PYTHON_BIN not found, and this project needs Python 3.13."
+    red "  Older interpreters install fine and then quietly give worse results:"
+    red "  a 3.9 venv froze yt-dlp at a build that could only fetch 360p."
+    yellow "  Install it with: brew install python@3.13"
+    yellow "  Or point at your own build: KICKOFF_PYTHON=/path/to/python3.13 ./kickoff.sh"
+    exit 1
+  fi
   yellow "First run: creating virtualenv and installing dependencies..."
-  python3 -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
   # shellcheck disable=SC1091
   source "$VENV_DIR/bin/activate"
   pip install --upgrade pip >/dev/null
@@ -49,6 +62,19 @@ else
   source "$VENV_DIR/bin/activate"
 fi
 green "✓ Python environment ready ($(python --version 2>&1))"
+
+# A pre-existing venv can be older than the floor, and nothing downstream would
+# say so. Report it rather than rebuild it — throwing away a working match-day
+# environment on launch would be the worse failure.
+if ! python depcheck.py; then
+  red "✗ The dependency check above found problems."
+  yellow "  A stale toolchain does not error, it returns worse numbers, so this"
+  yellow "  is worth fixing before a match rather than after."
+  yellow "  Usual fix: rm -rf $VENV_DIR && ./kickoff.sh"
+  yellow "  Continuing anyway in 5s — set KICKOFF_STRICT_DEPS=1 to stop here."
+  [ "${KICKOFF_STRICT_DEPS:-0}" = "1" ] && exit 1
+  sleep 5
+fi
 
 # --------------------------------------------------------------------------- #
 # 2. Check Ollama

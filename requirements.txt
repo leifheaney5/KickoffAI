@@ -1,25 +1,35 @@
 # ---- Kickoff Pulse Python dependencies ----
 # Install into a virtualenv (kickoff.sh does this for you):
-#   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+#   python3.13 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+#
+# Python 3.13 is a hard floor. On older interpreters pip does not fail — it
+# quietly resolves the newest build that still supports them and reports
+# success. That is how the project spent weeks on a yt-dlp frozen at October
+# 2025, which could only pull 360p from YouTube while a current build pulls
+# 1080p and 4K. `python depcheck.py` checks for that state; the floors below are
+# the backstop.
 
-# Microphone capture + silence-based chunking
-SpeechRecognition>=3.10.0
-PyAudio>=0.2.13
+# Microphone capture + silence-based chunking.
+# 3.11+ because Python 3.13 removed aifc/audioop/chunk from the stdlib (PEP
+# 594); older SpeechRecognition imports them directly and dies on import.
+SpeechRecognition>=3.11.0
+PyAudio>=0.2.14
 
 # Local transcription.
 # mlx-whisper is the Apple-Silicon-optimized path (uses the GPU / Neural Engine).
 # openai-whisper is the cross-platform fallback used automatically if mlx is unavailable.
 mlx-whisper>=0.4.0 ; sys_platform == "darwin" and platform_machine == "arm64"
-openai-whisper>=20231117
+openai-whisper>=20240930
 
 # Talking to the local Ollama HTTP API
-requests>=2.31.0
+requests>=2.32.0
 
 # Real-time dashboard
 streamlit>=1.50.0
 streamlit-autorefresh>=1.0.1  # fallback live-refresh for Streamlit < 1.37
 streamlit-image-coordinates>=0.2.0  # click-to-mark fixed-camera pitch calibration
-pandas>=2.0.0
+pandas>=2.2.3                 # first release shipping cp313 wheels
+numpy>=2.1.0                  # 2.0.2 was the last build 3.9 could install
 watchdog>=3.0.0  # faster, quieter Streamlit file-watching
 
 # Native desktop window (desktop.py / "Kickoff Pulse.app"). On macOS this pulls
@@ -28,12 +38,12 @@ pywebview>=5.0
 
 # Report export (email-friendly PDF) + timeline image rendering
 fpdf2>=2.7.0
-pillow>=10.0.0
+pillow>=11.0.0
 
 # Match library database (Postgres via Docker; SQLite fallback when
 # KICKOFF_DB_URL is unset). SQLAlchemy keeps the data layer backend-agnostic.
-SQLAlchemy>=2.0.0
-psycopg[binary]>=3.1.0  # PostgreSQL driver (postgresql+psycopg://)
+SQLAlchemy>=2.0.36
+psycopg[binary]>=3.2.0  # PostgreSQL driver (postgresql+psycopg://)
 
 # Tests
 pytest>=8.0.0

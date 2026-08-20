@@ -188,13 +188,49 @@ A third page turns the event log into analysis:
 ## Requirements
 
 - macOS on Apple Silicon (Intel works too via the openai-whisper fallback)
-- Python 3.9+
+- Python 3.13 (see [Why 3.13](#why-python-313) — older versions install
+  successfully and then quietly give you worse results)
 - [Ollama](https://ollama.com) with the `llama3.2` model
   (`brew install --cask ollama-app && ollama pull llama3.2`)
 - `ffmpeg` (Whisper uses it to decode audio): `brew install ffmpeg`
 - `portaudio` (PyAudio build dependency): `brew install portaudio`
 - Microphone permission granted to your terminal app
   (System Settings -> Privacy & Security -> Microphone)
+
+### Why Python 3.13
+
+3.13 is a hard floor, not a recommendation, and it is worth knowing why.
+
+The project ran on 3.9 for a long time. yt-dlp had already dropped 3.9, so every
+`pip install --upgrade yt-dlp` resolved back to an October 2025 build and printed
+success. That build's YouTube extractor was stale enough to only resolve 360p.
+Nothing failed, so the 360p ceiling was written down as a YouTube limitation and
+the roadmap was planned around it. On 3.13 the same URLs resolve 1080p and 4K.
+
+The same silent capping applied to numpy (stuck at 2.0.2) and torch (2.8.0). An
+old interpreter does not produce errors; it produces quietly worse results.
+
+To check an environment at any time:
+
+```bash
+python depcheck.py            # offline: interpreter floor, version floors, yt-dlp age
+python depcheck.py --online   # also asks PyPI what the newest release actually is
+```
+
+It exits non-zero when something is stale, and `kickoff.sh` runs it on every
+launch so a frozen toolchain cannot go unnoticed again.
+
+If you have an existing 3.9 or 3.11 `.venv`, replace it rather than upgrading in
+place — pip will not walk the old resolutions forward on its own:
+
+```bash
+rm -rf .venv
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install -r vision/requirements.txt   # optional: the Eye
+```
 
 ## Files
 
